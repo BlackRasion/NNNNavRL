@@ -389,9 +389,9 @@ class Navigation(Node):
                     "lidar": lidar_scan,
                     "direction": target_dir_2d,
                     "dynamic_obstacle": dyn_obs_states
-                })
-            })
-        })
+                }, batch_size=[])
+            }, batch_size=[])
+        }, batch_size=[])
 
         has_obstacle_in_range = self.check_obstacle(lidar_scan, dyn_obs_states)
         if (has_obstacle_in_range):
