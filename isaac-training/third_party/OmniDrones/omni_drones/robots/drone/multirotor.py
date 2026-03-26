@@ -27,7 +27,13 @@ from typing import Type, Dict
 import torch
 import torch.distributions as D
 import yaml
-from functorch import vmap
+try:
+    from torch.func import vmap  # PyTorch 2.0+
+except ImportError:
+    try:
+        from functorch import vmap  # Fallback for older versions
+    except ImportError:
+        vmap = None  # vmap not available
 from tensordict.nn import make_functional
 from torchrl.data import BoundedTensorSpec, CompositeSpec, UnboundedContinuousTensorSpec
 from tensordict import TensorDict

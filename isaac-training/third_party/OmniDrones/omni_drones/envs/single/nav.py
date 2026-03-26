@@ -25,7 +25,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.distributions as D
-from functorch import vmap
+try:
+    from torch.func import vmap  # PyTorch 2.0+
+except ImportError:
+    try:
+        from functorch import vmap  # Fallback for older versions
+    except ImportError:
+        vmap = None  # vmap not available
 
 from omni.isaac.core.utils.viewports import set_camera_view
 
