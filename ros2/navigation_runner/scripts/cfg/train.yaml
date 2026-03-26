@@ -32,9 +32,9 @@ viewer:
   resolution: [960, 720]
 
 wandb:
-  project: RL-Navigation
+  project: NavRLLL
   name: env-code-clean
-  entity: CERLAB-UAV-RL-Navigation
+  entity: 1803801503-shandong-university  
   mode: disabled # online
   # mode:  online
   run_id: #kw9xf9k9
