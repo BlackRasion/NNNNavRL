@@ -117,7 +117,7 @@ class IsaacEnv(EnvBase):
             backend="torch",
             sim_params=sim_params,
             physics_prim_path="/physicsScene",
-            device="cuda:0",
+            device=self.device,  # 使用配置中的设备（支持多GPU训练）
         )
         self._create_viewport_render_product()
         self.dt = self.sim.get_physics_dt()
