@@ -1,14 +1,12 @@
-import argparse
 import os
 import hydra
 import datetime
 import wandb
 import torch
-from omegaconf import DictConfig, OmegaConf
 from omni.isaac.kit import SimulationApp
 from ppo import PPO
 from omni_drones.controllers import LeePositionController
-from omni_drones.utils.torchrl.transforms import VelController, ravel_composite
+from omni_drones.utils.torchrl.transforms import VelController
 from omni_drones.utils.torchrl import SyncDataCollector, EpisodeStats
 from torchrl.envs.transforms import TransformedEnv, Compose
 from utils import evaluate
@@ -19,7 +17,7 @@ from torchrl.envs.utils import ExplorationType
 # =============================================================================
 # 获取配置文件目录路径（相对于当前脚本的父目录的 cfg 文件夹）
 FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cfg")
-# @hydra.main 装饰器自动加载配置文件
+# @hydra.main 自动加载配置文件
 @hydra.main(config_path=FILE_PATH, config_name="train", version_base=None)
 def main(cfg):
     # =========================================================================
@@ -57,7 +55,6 @@ def main(cfg):
     # 构建环境变换 TransformedEnv 允许在原始环境上叠加多个变换层
     # 这里主要添加速度控制器，将策略输出的速度指令转换为电机控制信号
     transforms = []
-    # transforms.append(ravel_composite(env.observation_spec, ("agents", "intrinsics"), start_dim=-1))
     controller = LeePositionController(9.81, env.drone.params).to(cfg.device)
     vel_transform = VelController(controller, yaw_control=False)
     transforms.append(vel_transform)
@@ -105,8 +102,6 @@ def main(cfg):
     # 步骤 5: 主训练循环
     # =========================================================================
     for i, data in enumerate(collector):
-        # print("data: ", data)
-        # print("============================")
         info = {
             "env_frames": collector._frames,    # env_frames: 已收集的总帧数
             "rollout_fps": collector._fps,      # rollout_fps: 数据收集速度（帧/秒）
@@ -118,8 +113,7 @@ def main(cfg):
 
         # 计算和记录训练回合统计信息
         episode_stats.add(data)
-        # 当所有并行环境都完成至少一个回合时，计算统计信息
-        if len(episode_stats) >= transformed_env.num_envs: 
+        if len(episode_stats) >= transformed_env.num_envs: # 当所有并行无人机都完成至少一个回合时，计算统计信息
             stats = {
                 "train/" + (".".join(k) if isinstance(k, tuple) else k): torch.mean(v.float()).item() 
                 for k, v in episode_stats.pop().items(True, True)

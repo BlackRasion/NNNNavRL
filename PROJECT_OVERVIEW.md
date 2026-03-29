@@ -509,7 +509,25 @@ class PPO(TensorDictModuleBase):
 
 **位置**: [isaac-training/training/scripts/utils.py](isaac-training/training/scripts/utils.py)
 
-**功能**: 处理世界坐标系和目标坐标系之间的转换。
+**功能**: 处理世界坐标系和目标坐标系之间的转换
+
+### 7. wandb记录信息
+- env_frames: 已收集的总帧数
+- rollout_fps: 数据收集速度（帧/秒）
+训练损失信息 train_loss_stats
+- actor_loss: Actor 损失
+- critic_loss: Critic 损失
+- entropy_loss: 熵损失
+- actor_grad_norm: Actor 梯度范数
+- critic_grad_norm: Critic 梯度范数
+- explained_var: 解释方差
+统计信息stats
+- return: 回合回报
+- episode_len: 回合长度
+- reach_goal: 是否到达目标
+- collision: 是否碰撞
+- truncated: 是否截断
+
 
 ---
 
