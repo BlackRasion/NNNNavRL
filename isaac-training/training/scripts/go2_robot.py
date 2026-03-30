@@ -40,11 +40,19 @@ class Go2RobotCfg(RobotCfg):
     )
 
 
+def _get_go2_usd_path():
+    """获取 Go2 USD 文件的绝对路径"""
+    current_file = os.path.abspath(__file__)
+    training_scripts_dir = os.path.dirname(current_file)
+    training_dir = os.path.dirname(training_scripts_dir)
+    isaac_training_dir = os.path.dirname(training_dir)
+    project_root = os.path.dirname(isaac_training_dir)
+    usd_path = os.path.join(project_root, "third_party", "Go2", "go2.usd")
+    return os.path.normpath(usd_path)
+
+
 UNITREE_GO2_CFG = {
-    "usd_path": os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-        "third_party", "Go2", "go2.usd"
-    ),
+    "usd_path": _get_go2_usd_path(),
     "init_state": {
         "pos": (0.0, 0.0, 0.4),
         "joint_pos": {
@@ -63,10 +71,13 @@ UNITREE_GO2_CFG = {
         },
         "joint_vel": {".*": 0.0},
     },
+    "soft_joint_pos_limit_factor": 0.9,
     "actuators": {
         "stiffness": 25.0,
         "damping": 0.5,
+        "friction": 0.0,
         "effort_limit": 23.5,
+        "saturation_effort": 23.5,
         "velocity_limit": 30.0,
     },
 }
@@ -211,12 +222,24 @@ class Go2Robot(RobotBase):
 
     def _create_prim(self, prim_path, translation, orientation):
         """创建机器人 prim"""
+        from pxr import UsdPhysics, PhysxSchema
+        
         prim = prim_utils.create_prim(
             prim_path,
             usd_path=self.usd_path,
             translation=translation,
             orientation=orientation,
         )
+        
+        if self.is_articulation:
+            stage = prim_utils.get_current_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+            
+            if not prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+                UsdPhysics.ArticulationRootAPI.Apply(prim)
+            if not prim.HasAPI(PhysxSchema.PhysxArticulationAPI):
+                PhysxSchema.PhysxArticulationAPI.Apply(prim)
+        
         return prim
 
     def initialize(
