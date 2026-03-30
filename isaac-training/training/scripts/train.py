@@ -75,8 +75,8 @@ def main(cfg):
     # -------------------------------------------------------------------------
     # 可选：从检查点加载预训练模型（用于微调或继续训练）
     # -------------------------------------------------------------------------
-    # checkpoint = "/home/zhefan/catkin_ws/src/navigation_runner/scripts/ckpts/checkpoint_2500.pt"
-    # policy.load_state_dict(torch.load(checkpoint))
+    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260327_222136-7punu4yw/files/checkpoint_6000.pt"
+    policy.load_state_dict(torch.load(checkpoint))
     
     # =========================================================================
     # 步骤 4: 初始化回合统计收集器 和 数据收集器

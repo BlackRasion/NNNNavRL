@@ -80,7 +80,8 @@ def main(cfg):
     # =========================================================================
     policy = PPO(cfg.algo, transformed_env.observation_spec, transformed_env.action_spec, cfg.device)
 
-    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260326_210306-kos2yh0s/files/checkpoint_final.pt"
+    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260329_170703-38sxzjis/files/checkpoint_29000.pt"
+    # python training/scripts/eval.py headless=True env.num_envs=1024 max_frame_num=1e6
     policy.load_state_dict(torch.load(checkpoint))
     
     # =========================================================================

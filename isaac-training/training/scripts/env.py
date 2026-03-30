@@ -106,7 +106,7 @@ class NavigationEnv(IsaacEnv):
         drone_model = MultirotorBase.REGISTRY[self.cfg.drone.model_name] 
         cfg = drone_model.cfg_cls(force_sensor=False)
         self.drone = drone_model(cfg=cfg)
-        drone_prim = self.drone.spawn(translations=[(0.0, 0.0, 2.0)])[0] # 在高度2米处生成
+        drone_prim = self.drone.spawn(translations=[(0.0, 0.0, 2.0)])[0] # 在高度2米处生成.
 
         # 2. 添加光照
         light = AssetBaseCfg(
@@ -193,7 +193,6 @@ class NavigationEnv(IsaacEnv):
         self.dyn_obs_step_count = 0 # 步数计数
         self.dyn_obs_size = torch.zeros((self.cfg.env_dyn.num_obstacles, 3), dtype=torch.float, device=self.device) 
 
-
         # 辅助函数：检查位置是否满足均匀分布条件
         def check_pos_validity(prev_pos_list, curr_pos, adjusted_obs_dist):
             for prev_pos in prev_pos_list:
@@ -202,6 +201,7 @@ class NavigationEnv(IsaacEnv):
             return True            
         # 计算期望的障碍物间距
         obs_dist = 2 * np.sqrt(self.map_range[0] * self.map_range[1] / self.cfg.env_dyn.num_obstacles) 
+        curr_obs_dist = obs_dist  # 初始化当前障碍物间距
         prev_pos_list = [] 
         cuboid_category_num = cylinder_category_num = int(dyn_obs_category_num/N_h) # 各4类
 
@@ -272,8 +272,6 @@ class NavigationEnv(IsaacEnv):
             self.dyn_obs_size[category_idx*self.dyn_obs_num_of_each_category:(category_idx+1)*self.dyn_obs_num_of_each_category] \
                 = torch.tensor([obs_width, obs_width, obs_height], dtype=torch.float, device=self.cfg.device)
 
-
-
     def move_dynamic_obstacle(self):
         """
         移动动态障碍物
@@ -322,7 +320,6 @@ class NavigationEnv(IsaacEnv):
             dynamic_obstacle.update(self.cfg.sim.dt)
 
         self.dyn_obs_step_count += 1
-
 
     def _set_specs(self):
         """
@@ -442,7 +439,6 @@ class NavigationEnv(IsaacEnv):
             self.target_pos[:, 0, 0] = torch.linspace(-0.5, 0.5, self.num_envs) * 32.
             self.target_pos[:, 0, 1] = -24.
             self.target_pos[:, 0, 2] = 2.            
-
 
     def _reset_idx(self, env_ids: torch.Tensor):
         """
