@@ -11,12 +11,12 @@
 # 默认配置继承（Hydra 配置组合）
 # -----------------------------------------------------------------------------
 # _self_: 当前文件的配置
-# drone: 无人机和传感器配置 (drone.yaml)
+# go2: Go2 机器人和传感器配置 (go2.yaml)
 # ppo: PPO 算法配置 (ppo.yaml)
 # sim: 仿真参数配置 (sim.yaml)
 defaults:
   - _self_
-  - drone
+  - go2
   - ppo
   - sim
 

@@ -20,8 +20,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from omni.isaac.kit import SimulationApp
 from ppo import PPO
-from omni_drones.controllers import LeePositionController
-from omni_drones.utils.torchrl.transforms import VelController, ravel_composite
+from go2_velocity_controller import Go2VelocityController, Go2VelController
 from omni_drones.utils.torchrl import SyncDataCollector, EpisodeStats
 from torchrl.envs.transforms import TransformedEnv, Compose
 from utils import evaluate
@@ -69,8 +68,8 @@ def main(cfg):
     # 步骤 4: 构建变换环境（与训练时相同）
     # =========================================================================
     transforms = []
-    controller = LeePositionController(9.81, env.drone.params).to(cfg.device)
-    vel_transform = VelController(controller, yaw_control=False)
+    controller = Go2VelocityController(dt=cfg.sim.dt).to(cfg.device)
+    vel_transform = Go2VelController(controller)
     transforms.append(vel_transform)
     transformed_env = TransformedEnv(env, Compose(*transforms)).train()
     transformed_env.set_seed(cfg.seed)    
@@ -80,9 +79,10 @@ def main(cfg):
     # =========================================================================
     policy = PPO(cfg.algo, transformed_env.observation_spec, transformed_env.action_spec, cfg.device)
 
-    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260329_170703-38sxzjis/files/checkpoint_29000.pt"
+    # 注意：使用新的 Go2VelocityController 后，维度不兼容，需要重新训练
+    # checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260329_170703-38sxzjis/files/checkpoint_29000.pt"
     # python training/scripts/eval.py headless=True env.num_envs=1024 max_frame_num=1e6
-    policy.load_state_dict(torch.load(checkpoint))
+    # policy.load_state_dict(torch.load(checkpoint))
     
     # =========================================================================
     # 步骤 6: 初始化统计收集器

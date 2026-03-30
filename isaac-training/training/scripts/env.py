@@ -1,10 +1,10 @@
 """
-Navigation Environment for Drone Navigation with Reinforcement Learning
-无人机导航强化学习环境
+Navigation Environment for Go2 Robot Navigation with Reinforcement Learning
+Go2 机器人导航强化学习环境
 
 该文件实现了 NavigationEnv 类，是 NavRL 项目的核心环境模块。
 基于 NVIDIA Isaac Sim 仿真平台，支持：
-- 无人机物理仿真
+- Go2 四足机器人物理仿真
 - LiDAR 传感器模拟
 - 静态和动态障碍物
 - 多模态观测（LiDAR + 内部状态 + 动态障碍物）
@@ -17,7 +17,7 @@ from tensordict.tensordict import TensorDict, TensorDictBase
 from torchrl.data import UnboundedContinuousTensorSpec, CompositeSpec, DiscreteTensorSpec
 from omni_drones.envs.isaac_env import IsaacEnv, AgentSpec
 import omni.isaac.orbit.sim as sim_utils
-from omni_drones.robots.drone import MultirotorBase
+from go2_robot import Go2Robot
 from omni.isaac.orbit.assets import AssetBaseCfg
 from omni.isaac.orbit.terrains import TerrainImporterCfg, TerrainImporter, TerrainGeneratorCfg, HfDiscreteObstaclesTerrainCfg
 from omni_drones.utils.torch import euler_to_quaternion, quat_axis
@@ -34,7 +34,7 @@ class NavigationEnv(IsaacEnv):
     """
     导航环境类
     
-    继承自 IsaacEnv，实现无人机在动态环境中的导航任务
+    继承自 IsaacEnv，实现 Go2 机器人在动态环境中的导航任务
     
     一个完整的仿真步骤流程：
     1. _pre_sim_step: 应用动作 -> 推进仿真
@@ -51,25 +51,25 @@ class NavigationEnv(IsaacEnv):
         # LiDAR 参数配置
         # =========================================================================
         self.lidar_range = cfg.sensor.lidar_range                    # 探测范围 (4m)
-        self.lidar_vfov = (max(-89., cfg.sensor.lidar_vfov[0]), min(89., cfg.sensor.lidar_vfov[1]))  # 垂直视场角
-        self.lidar_vbeams = cfg.sensor.lidar_vbeams                  # 垂直光束数 (4)
+        self.lidar_vfov = (max(0., cfg.sensor.lidar_vfov[0]), min(89., cfg.sensor.lidar_vfov[1]))  # 垂直视场角 [0, 20]
+        self.lidar_vbeams = cfg.sensor.lidar_vbeams                  # 垂直光束数 (3)
         self.lidar_hres = cfg.sensor.lidar_hres                      # 水平分辨率 (10°)
         self.lidar_hbeams = int(360/self.lidar_hres)                # 水平光束数 (36)
 
         super().__init__(cfg, cfg.headless)
         
         # =========================================================================
-        # 无人机初始化
+        # Go2 机器人初始化
         # =========================================================================        
-        self.drone.initialize()
-        self.init_vels = torch.zeros_like(self.drone.get_velocities())
+        self.go2.initialize()
+        self.init_vels = torch.zeros_like(self.go2.get_velocities())
 
         # =========================================================================
         # LiDAR 传感器初始化
         # =========================================================================
         # RayCaster 用于模拟 LiDAR 射线检测
         ray_caster_cfg = RayCasterCfg(
-            prim_path="/World/envs/env_.*/Hummingbird_0/base_link",
+            prim_path="/World/envs/env_.*/Go2Robot_0/base_link",
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
             attach_yaw_only=True,
             pattern_cfg=patterns.BpearlPatternCfg(
@@ -90,23 +90,21 @@ class NavigationEnv(IsaacEnv):
             self.target_pos = torch.zeros(self.num_envs, 1, 3)      # 目标位置 [num_envs, 1, 3]
             self.target_dir = torch.zeros(self.num_envs, 1, 3)      # 目标方向（用于坐标变换）
             self.height_range = torch.zeros(self.num_envs, 1, 2)    # 高度范围 [min, max]
-            self.prev_drone_vel_w = torch.zeros(self.num_envs, 1, 3)  # 上一时刻速度
+            self.prev_robot_vel_w = torch.zeros(self.num_envs, 1, 3)  # 上一时刻速度
 
 
     def _design_scene(self):
         """
         设计仿真场景
         
-        创建无人机、光照、地面、静态障碍物地形和动态障碍物
+        创建 Go2 机器人、光照、地面、静态障碍物地形和动态障碍物
         
         返回:
-            list: 无人机 prim 路径列表
+            list: 机器人 prim 路径列表
         """
-        # 1. 创建无人机 /World/envs/envs_0
-        drone_model = MultirotorBase.REGISTRY[self.cfg.drone.model_name] 
-        cfg = drone_model.cfg_cls(force_sensor=False)
-        self.drone = drone_model(cfg=cfg)
-        drone_prim = self.drone.spawn(translations=[(0.0, 0.0, 2.0)])[0] # 在高度2米处生成.
+        # 1. 创建 Go2 机器人 /World/envs/envs_0
+        self.go2 = Go2Robot()
+        robot_prim = self.go2.spawn(translations=[(0.0, 0.0, 0.4)])[0] # 在高度0.4米处生成
 
         # 2. 添加光照
         light = AssetBaseCfg(
@@ -327,7 +325,7 @@ class NavigationEnv(IsaacEnv):
         
         TorchRL 使用这些规格来验证数据形状和类型
         """
-        observation_dim = 8 # 无人机内部状态维度
+        observation_dim = 8 # Go2 机器人内部状态维度
         num_dim_each_dyn_obs_state = 10 # 每个动态障碍物的状态维度
 
         # =========================================================================
@@ -336,9 +334,9 @@ class NavigationEnv(IsaacEnv):
         self.observation_spec = CompositeSpec({
             "agents": CompositeSpec({
                 "observation": CompositeSpec({
-                    # 无人机内部状态: [相对位置(3), 水平距离(1), 垂直距离(1), 速度(3)] = 8
+                    # Go2 机器人内部状态: [相对位置(3), x距离(1), y距离(1), 速度(3)] = 8
                     "state": UnboundedContinuousTensorSpec((observation_dim,), device=self.device),
-                    # LiDAR 扫描数据: [1, 36, 4] (通道, 水平, 垂直) 
+                    # LiDAR 扫描数据: [1, 36, 3] (通道, 水平, 垂直) 
                     "lidar": UnboundedContinuousTensorSpec((1, self.lidar_hbeams, self.lidar_vbeams), device=self.device),
                     # 目标方向向量（用于坐标变换）
                     "direction": UnboundedContinuousTensorSpec((1, 3), device=self.device),
@@ -353,7 +351,7 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         self.action_spec = CompositeSpec({
             "agents": CompositeSpec({
-                "action": self.drone.action_spec, # 无人机动作空间
+                "action": self.go2.action_spec, # Go2 机器人动作空间 (3维速度控制)
             })
         }).expand(self.num_envs).to(self.device)
         
@@ -391,7 +389,7 @@ class NavigationEnv(IsaacEnv):
         # 额外信息空间定义
         # =========================================================================
         info_spec = CompositeSpec({
-            "drone_state": UnboundedContinuousTensorSpec((self.drone.n, 13), device=self.device),
+            "robot_state": UnboundedContinuousTensorSpec((1, 13), device=self.device),
         }).expand(self.num_envs).to(self.device)
         # 将 stats 和 info 添加到观测规格中
         self.observation_spec["stats"] = stats_spec
@@ -442,12 +440,12 @@ class NavigationEnv(IsaacEnv):
 
     def _reset_idx(self, env_ids: torch.Tensor):
         """
-        重置指定的无人机状态
+        重置指定的 Go2 机器人状态
         
         参数:
-            env_ids: 需要重置的无人机 ID
+            env_ids: 需要重置的机器人 ID
         """
-        self.drone._reset_idx(env_ids, self.training)    # 重置无人机物理状态
+        self.go2._reset_idx(env_ids, self.training)    # 重置 Go2 机器人物理状态
         self.reset_target(env_ids)  # 重置目标位置
         if (self.training):
             # 训练模式：随机生成起始位置（与目标类似）
@@ -459,31 +457,31 @@ class NavigationEnv(IsaacEnv):
 
             # 随机生成起始位置
             pos = 48. * torch.rand(env_ids.size(0), 1, 3, dtype=torch.float, device=self.device) + (-24.)
-            heights = 0.5 + torch.rand(env_ids.size(0), dtype=torch.float, device=self.device) * (2.5 - 0.5)
-            pos[:, 0, 2] = heights# height
+            heights = 0.4 + torch.rand(env_ids.size(0), dtype=torch.float, device=self.device) * (0.6 - 0.4)  # 高度在 [0.4, 0.6] 米（地面机器人）
+            pos[:, 0, 2] = heights
             pos = pos * selected_masks + selected_shifts
         else:
             # 评估模式：固定起始位置
             pos = torch.zeros(len(env_ids), 1, 3, device=self.device)
             pos[:, 0, 0] = (env_ids / self.num_envs - 0.5) * 32.
             pos[:, 0, 1] = 24.
-            pos[:, 0, 2] = 2.
+            pos[:, 0, 2] = 0.4
         
         # 坐标变换：计算目标方向（用于后续坐标变换）
         self.target_dir[env_ids] = self.target_pos[env_ids] - pos
 
-        # 设置无人机朝向：面向目标
+        # 设置机器人朝向：面向目标
         rpy = torch.zeros(len(env_ids), 1, 3, device=self.device)
         diff = self.target_pos[env_ids] - pos
         facing_yaw = torch.atan2(diff[..., 1], diff[..., 0])    # 计算偏航角（水平面内朝向目标）
         rpy[..., 2] = facing_yaw
         # 欧拉角转四元数
         rot = euler_to_quaternion(rpy)
-        # 设置无人机位姿和速度
-        self.drone.set_world_poses(pos, rot, env_ids)
-        self.drone.set_velocities(self.init_vels[env_ids], env_ids)
+        # 设置机器人位姿和速度
+        self.go2.set_world_poses(pos, rot, env_ids)
+        self.go2.set_velocities(self.init_vels[env_ids], env_ids)
         # 重置速度记录
-        self.prev_drone_vel_w[env_ids] = 0.
+        self.prev_robot_vel_w[env_ids] = 0.
         # 计算高度范围（起点和目标高度的最小/最大值）
         self.height_range[env_ids, 0, 0] = torch.min(pos[:, 0, 2], self.target_pos[env_ids, 0, 2])
         self.height_range[env_ids, 0, 1] = torch.max(pos[:, 0, 2], self.target_pos[env_ids, 0, 2])
@@ -495,7 +493,7 @@ class NavigationEnv(IsaacEnv):
         仿真步前处理：应用动作
         """
         actions = tensordict[("agents", "action")] 
-        self.drone.apply_action(actions) 
+        self.go2.apply_action(actions) 
 
     def _post_sim_step(self, tensordict: TensorDictBase):
         """
@@ -517,8 +515,8 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 获取机器人根状态
         # =========================================================================
-        self.root_state = self.drone.get_state(env_frame=False) # [世界位置(3), 姿态四元数(4), 世界速度(3), 角速度(3), ...]
-        self.info["drone_state"][:] = self.root_state[..., :13] # 保存前 13 维用于额外信息
+        self.root_state = self.go2.get_state(env_frame=False) # [世界位置(3), 姿态四元数(4), 世界速度(3), 角速度(3), ...]
+        self.info["robot_state"][:] = self.root_state[..., :13] # 保存前 13 维用于额外信息
 
         # =========================================================================
         # 观测 I: LiDAR 扫描数据
@@ -530,16 +528,16 @@ class NavigationEnv(IsaacEnv):
             .clamp_max(self.lidar_range)       # 限制最大距离并 reshape
             .reshape(self.num_envs, 1, *self.lidar_resolution)
         ) 
-        # 结果: [num_envs, 1, 36, 4]，值越大表示障碍物越近
+        # 结果: [num_envs, 1, 36, 3]，值越大表示障碍物越近
 
         # =========================================================================
-        # 观测 II: 无人机内部状态
+        # 观测 II: Go2 机器人内部状态
         # =========================================================================
         # a. 距离信息
         rpos = self.target_pos - self.root_state[..., :3]       # 相对位置向量  
         distance = rpos.norm(dim=-1, keepdim=True)              # 总距离
-        distance_2d = rpos[..., :2].norm(dim=-1, keepdim=True)  # 水平距离
-        distance_z = rpos[..., 2].unsqueeze(-1)                 # 垂直距离
+        distance_x = rpos[..., 0].unsqueeze(-1)                 # x方向距离
+        distance_y = rpos[..., 1].unsqueeze(-1)                 # y方向距离
         
         # b. 目标方向（用于坐标变换）
         target_dir_2d = self.target_dir.clone()
@@ -553,8 +551,8 @@ class NavigationEnv(IsaacEnv):
         vel_w = self.root_state[..., 7:10] # 世界速度
         vel_g = vec_to_new_frame(vel_w, target_dir_2d)
 
-        # 组合无人机状态: [相对位置(3), 水平距离(1), 垂直距离(1), 速度(3)] = 8
-        drone_state = torch.cat([rpos_clipped_g, distance_2d, distance_z, vel_g], dim=-1).squeeze(1)
+        # 组合机器人状态: [相对位置(3), x距离(1), y距离(1), 速度(3)] = 8
+        robot_state = torch.cat([rpos_clipped_g, distance_x, distance_y, vel_g], dim=-1).squeeze(1)
 
         # =========================================================================
         # 观测 III: 动态障碍物状态（如果启用）
@@ -566,7 +564,7 @@ class NavigationEnv(IsaacEnv):
             # 2D 障碍物高度设为 0（只考虑水平距离） 
             dyn_obs_rpos_expanded[:, int(self.dyn_obs_state.size(0)/2):, 2] = 0.
             # 计算水平距离
-            dyn_obs_distance_2d = torch.norm(dyn_obs_rpos_expanded[..., :2], dim=2)  # Shape: (1000, 40). calculate 2d distance to each obstacle for all drones
+            dyn_obs_distance_2d = torch.norm(dyn_obs_rpos_expanded[..., :2], dim=2)  # Shape: (1000, 40). calculate 2d distance to each obstacle for all robots
             # 选择最近的 N 个
             _, closest_dyn_obs_idx = torch.topk(dyn_obs_distance_2d, self.cfg.algo.feature_extractor.dyn_obs_num, dim=1, largest=False) # pick top N closest obstacle index
             # 标记超出范围的障碍物
@@ -633,7 +631,7 @@ class NavigationEnv(IsaacEnv):
         # 组合最终观测
         # =========================================================================
         obs = {
-            "state": drone_state,
+            "state": robot_state,
             "lidar": self.lidar_scan,
             "direction": target_dir_2d,
             "dynamic_obstacle": dyn_obs_states
@@ -651,38 +649,30 @@ class NavigationEnv(IsaacEnv):
 
         # c. 速度奖励: 朝向目标方向的速度分量
         vel_direction = rpos / distance.clamp_min(1e-6)
-        reward_vel = (self.drone.vel_w[..., :3] * vel_direction).sum(-1)#.clip(max=2.0)
+        reward_vel = (self.go2.vel_w[..., :3] * vel_direction).sum(-1)#.clip(max=2.0)
         
         # d. 平滑性惩罚: 速度变化的大小
-        penalty_smooth = (self.drone.vel_w[..., :3] - self.prev_drone_vel_w).norm(dim=-1)
+        penalty_smooth = (self.go2.vel_w[..., :3] - self.prev_robot_vel_w).norm(dim=-1)
         
-        # e. 高度惩罚: 飞出起点-目标高度范围时惩罚
-        penalty_height = torch.zeros(self.num_envs, 1, device=self.cfg.device)
-        penalty_height[self.drone.pos[..., 2] > (self.height_range[..., 1] + 0.2)] = ( (self.drone.pos[..., 2] - self.height_range[..., 1] - 0.2)**2 )[self.drone.pos[..., 2] > (self.height_range[..., 1] + 0.2)]
-        penalty_height[self.drone.pos[..., 2] < (self.height_range[..., 0] - 0.2)] = ( (self.height_range[..., 0] - 0.2 - self.drone.pos[..., 2])**2 )[self.drone.pos[..., 2] < (self.height_range[..., 0] - 0.2)]
-
-
-        # f. 碰撞检测，LiDAR 读数接近最大值表示有障碍物非常近
+        # e. 碰撞检测，LiDAR 读数接近最大值表示有障碍物非常近
         static_collision = einops.reduce(self.lidar_scan, "n 1 w h -> n 1", "max") >  (self.lidar_range - 0.3) # 0.3 collision radius
         collision = static_collision | dynamic_collision
         
-        # 最终奖励组合
+        # 最终奖励组合（移除高度惩罚）
         if (self.cfg.env_dyn.num_obstacles != 0):
             self.reward = (
                 reward_vel +                    # 朝向目标的速度
                 1. +                            # 生存奖励
                 reward_safety_static * 1.0 +    # 静态障碍物安全
                 reward_safety_dynamic * 1.0 -   # 动态障碍物安全
-                penalty_smooth * 0.1 -          # 平滑性惩罚
-                penalty_height * 8.0            # 高度惩罚（权重较大）
+                penalty_smooth * 0.1            # 平滑性惩罚
             )
         else:
             self.reward = (
                 reward_vel + 
                 1. + 
                 reward_safety_static * 1.0 - 
-                penalty_smooth * 0.1 - 
-                penalty_height * 8.0
+                penalty_smooth * 0.1
             )
 
         # =========================================================================
@@ -690,18 +680,15 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 到达目标（距离 < 0.5m）
         reach_goal = (distance.squeeze(-1) < 0.5)
-        # 高度越界
-        below_bound = self.drone.pos[..., 2] < 0.2   # 低于 0.2m
-        above_bound = self.drone.pos[..., 2] > 4.    # 高于 4m
 
-        # 终止条件：越界或碰撞
-        self.terminated = below_bound | above_bound | collision
+        # 终止条件：只检测碰撞（移除高度越界检测）
+        self.terminated = collision
 
         # 截断条件：达到最大回合长度
         self.truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
 
         # 更新上一时刻速度（用于下次平滑性计算）
-        self.prev_drone_vel_w = self.drone.vel_w[..., :3].clone()
+        self.prev_robot_vel_w = self.go2.vel_w[..., :3].clone()
 
         # =========================================================================
         # 更新统计信息

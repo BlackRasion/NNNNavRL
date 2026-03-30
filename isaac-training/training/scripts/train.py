@@ -5,8 +5,7 @@ import wandb
 import torch
 from omni.isaac.kit import SimulationApp
 from ppo import PPO
-from omni_drones.controllers import LeePositionController
-from omni_drones.utils.torchrl.transforms import VelController
+from go2_velocity_controller import Go2VelocityController, Go2VelController
 from omni_drones.utils.torchrl import SyncDataCollector, EpisodeStats
 from torchrl.envs.transforms import TransformedEnv, Compose
 from utils import evaluate
@@ -52,11 +51,10 @@ def main(cfg):
     # =========================================================================    
     from env import NavigationEnv
     env = NavigationEnv(cfg)
-    # 构建环境变换 TransformedEnv 允许在原始环境上叠加多个变换层
-    # 这里主要添加速度控制器，将策略输出的速度指令转换为电机控制信号
+    # 构建环境变换 TransformedEnv 允许在原始环境上叠加多个变换层,这里主要添加速度控制器
     transforms = []
-    controller = LeePositionController(9.81, env.drone.params).to(cfg.device)
-    vel_transform = VelController(controller, yaw_control=False)
+    controller = Go2VelocityController(dt=cfg.sim.dt).to(cfg.device)
+    vel_transform = Go2VelController(controller)
     transforms.append(vel_transform)
     # 应用所有变换，创建训练环境
     transformed_env = TransformedEnv(env, Compose(*transforms)).train()
@@ -74,9 +72,10 @@ def main(cfg):
 
     # -------------------------------------------------------------------------
     # 可选：从检查点加载预训练模型（用于微调或继续训练）
+    # 注意：使用新的 Go2VelocityController 后，维度不兼容，需要重新训练
     # -------------------------------------------------------------------------
-    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260327_222136-7punu4yw/files/checkpoint_6000.pt"
-    policy.load_state_dict(torch.load(checkpoint))
+    # checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260327_222136-7punu4yw/files/checkpoint_6000.pt"
+    # policy.load_state_dict(torch.load(checkpoint))
     
     # =========================================================================
     # 步骤 4: 初始化回合统计收集器 和 数据收集器

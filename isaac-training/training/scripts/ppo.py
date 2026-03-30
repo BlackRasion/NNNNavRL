@@ -1,9 +1,13 @@
 """
-PPO (Proximal Policy Optimization) 算法实现
+PPO (Proximal Policy Optimization) 算法实现 - Go2 四足机器人导航
 
-该文件实现了 PPO 算法，包括：
+该文件实现了 Go2 四足机器人的 PPO 算法，包括：
 1. 特征提取器（CNN + MLP）
+   - LiDAR 静态障碍物特征: [batch, 1, 36, 3] -> 128 维
+   - 机器人状态特征: 8 维 (位置、速度、方向等)
+   - 动态障碍物特征: [batch, 1, 5, 10] -> 64 维
 2. Actor 网络（Beta 分布策略）
+   - 输出动作维度: 3 (Vx, Vy, Vyaw)
 3. Critic 网络（状态价值估计）
 4. GAE 估计
 5. PPO 损失计算和参数更新
@@ -47,7 +51,7 @@ class PPO(TensorDictModuleBase):
         # 步骤 1: 构建特征提取网络
         # =========================================================================    
         # 1.1 LiDAR 静态障碍物特征提取器 (CNN)
-        # 输入: LiDAR 数据 [batch, channels=1, 水平=36, 垂直=4]
+        # 输入: LiDAR 数据 [batch, channels=1, 水平=36, 垂直=3]
         # 输出: 128 维特征向量    
         feature_extractor_network = nn.Sequential(
             nn.LazyConv2d(out_channels=4, kernel_size=[5, 3], padding=[2, 1]), nn.ELU(), 
@@ -68,8 +72,9 @@ class PPO(TensorDictModuleBase):
 
         # 1.3 组合特征提取器
         # - 静态障碍物特征 (LiDAR): 128 维
-        # - 机器人内部状态特征 (位置、速度等): 来自 observation.state 8维
+        # - 机器人内部状态特征 (位置、速度、方向等): 来自 observation.state 8 维
         # - 动态障碍物特征: 64 维
+        # - 总特征维度: 128 + 8 + 64 = 200 维
         self.feature_extractor = TensorDictSequential(
             TensorDictModule(feature_extractor_network, [("agents", "observation", "lidar")], ["_cnn_feature"]),
             TensorDictModule(dynamic_obstacle_network, [("agents", "observation", "dynamic_obstacle")], ["_dynamic_obstacle_feature"]),
@@ -80,6 +85,7 @@ class PPO(TensorDictModuleBase):
         # =========================================================================
         # 步骤 2: 构建 Actor 网络（策略网络）
         # =========================================================================
+        # 动作维度: 3 (Vx, Vy, Vyaw) - Go2 四足机器人的线速度和角速度
         self.n_agents, self.action_dim = action_spec.shape
         self.actor = ProbabilisticActor(
             TensorDictModule(BetaActor(self.action_dim), ["_feature"], ["alpha", "beta"]),
@@ -142,6 +148,7 @@ class PPO(TensorDictModuleBase):
         # =========================================================================
         # 坐标变换: 将输出速度以世界坐标系表示
         # =========================================================================
+        # Go2 机器人动作: Vx (前进速度), Vy (横向速度), Vyaw (角速度)
         # 将归一化动作 (0,1) 映射到实际速度范围 [-action_limit, action_limit]        
         actions = (2 * tensordict["agents", "action_normalized"] * self.cfg.actor.action_limit) - self.cfg.actor.action_limit
         actions_world = vec_to_world(actions, tensordict["agents", "observation", "direction"]) # 使用方向向量将局部动作转换为世界坐标系
