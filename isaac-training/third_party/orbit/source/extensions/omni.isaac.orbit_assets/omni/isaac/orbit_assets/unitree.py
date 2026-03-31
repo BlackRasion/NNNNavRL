@@ -16,17 +16,19 @@ Unitree 四足机器人配置文件
 参考文档: https://github.com/unitreerobotics/unitree_ros
 """
 
+import os
 import omni.isaac.orbit.sim as sim_utils
 from omni.isaac.orbit.actuators import ActuatorNetMLPCfg, DCMotorCfg
 from omni.isaac.orbit.assets.articulation import ArticulationCfg
-from omni.isaac.orbit.utils.assets import ISAAC_ORBIT_NUCLEUS_DIR
+
+_GO2_USD_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))))),
+    "Go2", "go2.usd"
+)
 
 UNITREE_GO2_CFG = ArticulationCfg(
-    # =========================================================================
-    # 机器人模型加载配置
-    # =========================================================================
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ISAAC_ORBIT_NUCLEUS_DIR}/Robots/Unitree/Go2/go2.usd",
+        usd_path=_GO2_USD_PATH,
         activate_contact_sensors=True,  # 启用接触传感器
         rigid_props=sim_utils.RigidBodyPropertiesCfg(   # 刚体属性
             disable_gravity=False,  
