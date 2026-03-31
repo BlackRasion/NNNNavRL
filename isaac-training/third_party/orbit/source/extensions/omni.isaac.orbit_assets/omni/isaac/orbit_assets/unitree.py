@@ -26,7 +26,7 @@ UNITREE_GO2_CFG = ArticulationCfg(
     # 机器人模型加载配置
     # =========================================================================
     spawn=sim_utils.UsdFileCfg(
-        usd_path=r"isaac-training\third_party\Go2\go2.usd",
+        usd_path=f"{ISAAC_ORBIT_NUCLEUS_DIR}/Robots/Unitree/Go2/go2.usd",
         activate_contact_sensors=True,  # 启用接触传感器
         rigid_props=sim_utils.RigidBodyPropertiesCfg(   # 刚体属性
             disable_gravity=False,  
