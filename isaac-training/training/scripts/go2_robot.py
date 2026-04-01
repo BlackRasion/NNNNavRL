@@ -36,8 +36,8 @@ class Go2Robot(RobotBase):
         self.collision_size = (0.3762, 0.0935, 0.114)
         self.inertia = (0.02448, 0.098077, 0.107)
         
-        self.max_linear_vel = 2.0
-        self.max_angular_vel = 3.14159
+        self.max_linear_vel = 2
+        self.max_angular_vel = 1.57
         
         self.action_spec = BoundedTensorSpec(
             -1, 1, 3, device=self.device
@@ -75,9 +75,9 @@ class Go2Robot(RobotBase):
                 enable_gyroscopic_forces=False,
                 solver_position_iteration_count=4,
                 solver_velocity_iteration_count=4,
-                max_angular_velocity=100.0,
-                max_linear_velocity=100.0,
-                max_depenetration_velocity=10.0,
+                max_angular_velocity=self.max_angular_vel * 1.5,
+                max_linear_velocity=self.max_linear_vel * 1.5,
+                max_depenetration_velocity=1.0,
                 linear_damping=0.5,
                 angular_damping=0.5,
             ),
@@ -186,6 +186,10 @@ class Go2Robot(RobotBase):
         vx = actions[..., 0] * self.max_linear_vel
         vy = actions[..., 1] * self.max_linear_vel
         vyaw = actions[..., 2] * self.max_angular_vel
+        
+        vx = torch.clamp(vx, -self.max_linear_vel, self.max_linear_vel)
+        vy = torch.clamp(vy, -self.max_linear_vel, self.max_linear_vel)
+        vyaw = torch.clamp(vyaw, -self.max_angular_vel, self.max_angular_vel)
         
         current_vel = self.get_velocities(True)
         new_vel = current_vel.clone()

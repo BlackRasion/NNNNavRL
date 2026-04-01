@@ -640,39 +640,51 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 奖励计算
         # =========================================================================
-        # a. 静态障碍物安全奖励: 基于 LiDAR 距离的对数，距离越近奖励越低（负值越大），鼓励保持安全距离
-        reward_safety_static = torch.log((self.lidar_range-self.lidar_scan).clamp(min=1e-6, max=self.lidar_range)).mean(dim=(2, 3))
+        # a. 静态障碍物安全奖励: 只在距离很2m时惩罚，避免过度绕行
+        min_lidar_dist = (self.lidar_range - self.lidar_scan).min(dim=-1)[0].min(dim=-1)[0].unsqueeze(-1)
+        safety_threshold = 2.0
+        reward_safety_static = torch.where(
+            min_lidar_dist < safety_threshold,
+            -5.0 * (safety_threshold - min_lidar_dist) / safety_threshold,
+            torch.zeros_like(min_lidar_dist)
+        )
 
         # b. 动态障碍物安全奖励
         if (self.cfg.env_dyn.num_obstacles != 0):
             reward_safety_dynamic = torch.log((closest_dyn_obs_distance_reward).clamp(min=1e-6, max=self.lidar_range)).mean(dim=-1, keepdim=True)
 
+
         # c. 速度奖励: 朝向目标方向的速度分量
         vel_direction = rpos / distance.clamp_min(1e-6)
         reward_vel = (self.go2.vel_w[..., :3] * vel_direction).sum(-1)#.clip(max=2.0)
         
-        # d. 平滑性惩罚: 速度变化的大小
+        # d. 进度奖励: 鼓励减小与目标的距离
+        reward_progress = -distance.squeeze(-1) * 0.1
+        
+        # e. 平滑性惩罚: 速度变化的大小
         penalty_smooth = (self.go2.vel_w[..., :3] - self.prev_robot_vel_w).norm(dim=-1)
         
-        # e. 碰撞检测，LiDAR 读数接近最大值表示有障碍物非常近
+        # f. 碰撞检测，LiDAR 读数接近最大值表示有障碍物非常近
         static_collision = einops.reduce(self.lidar_scan, "n 1 w h -> n 1", "max") >  (self.lidar_range - 0.3) # 0.3 collision radius
         collision = static_collision | dynamic_collision
         
-        # 最终奖励组合（移除高度惩罚）
+        # 最终奖励组合
         if (self.cfg.env_dyn.num_obstacles != 0):
             self.reward = (
-                reward_vel +                    # 朝向目标的速度
-                1. +                            # 生存奖励
-                reward_safety_static * 1.0 +    # 静态障碍物安全
-                reward_safety_dynamic * 1.0 -   # 动态障碍物安全
-                penalty_smooth * 0.1            # 平滑性惩罚
+                reward_vel * 1.1 +               # 朝向目标的速度（增加权重）
+                1. +                             # 生存奖励
+                reward_progress +                # 进度奖励（新增）
+                reward_safety_static * 1.0 +     # 静态障碍物安全
+                reward_safety_dynamic * 1.0 -    # 动态障碍物安全
+                penalty_smooth * 0.09            # 平滑性惩罚
             )
         else:
             self.reward = (
-                reward_vel + 
+                reward_vel * 1.1 + 
                 1. + 
+                reward_progress + 
                 reward_safety_static * 1.0 - 
-                penalty_smooth * 0.1
+                penalty_smooth * 0.09
             )
 
         # =========================================================================
