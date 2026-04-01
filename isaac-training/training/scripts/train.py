@@ -75,7 +75,7 @@ def main(cfg):
     # -------------------------------------------------------------------------
     # 可选：从检查点加载预训练模型（用于微调或继续训练）
     # -------------------------------------------------------------------------
-    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260327_222136-7punu4yw/files/checkpoint_6000.pt"
+    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260330_215903-nxcd7raj/files/checkpoint_final.pt"
     policy.load_state_dict(torch.load(checkpoint))
     
     # =========================================================================
