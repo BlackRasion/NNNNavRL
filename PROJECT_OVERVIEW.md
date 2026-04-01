@@ -15,13 +15,14 @@
 
 ## 项目简介
 
-**NavRL** 是一个基于强化学习的机器人安全导航框架，专注于在动态环境中实现自主飞行。
+**NavRL** 是一个基于强化学习的机器人安全导航框架，专注于在动态环境中实现自主导航。
+
 ### 核心特点
-- 🚁 **无人机导航**：专为 UAV（无人机）设计的强化学习导航系统
+- 🤖 **多平台支持**：支持无人机（UAV）和四足机器人（Go2）导航
 - 🔄 **动态避障**：支持静态和动态障碍物的实时避让
 - 🎯 **目标导向**：基于目标点的自主导航能力
-- 🤖 **多机器人支持**：可扩展至多机器人协同导航场景
 - 🌐 **跨平台部署**：支持 ROS1/ROS2 部署和真实机器人应用
+- ⚡ **简化模型训练**：使用刚体模型加速训练，无需复杂关节控制
 
 ---
 
@@ -38,7 +39,7 @@
 │  │                    训练层 (Isaac Sim 环境)                         │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────────┐  │  │
 │  │  │ 仿真环境      │  │ PPO 算法    │  │ 策略网络                  │  │  │
-│  │  │ NavigationEnv│→│ 训练循环     │→ │ Actor-Critic             │  │  │
+│  │  │ NavigationEnv│→│ 训练循环     │→│ Actor-Critic             │  │  │
 │  │  └─────────────┘  └─────────────┘  └──────────────────────────┘  │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                              ↓ 模型导出                                  │
@@ -58,7 +59,7 @@
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │                    机器人执行层                                    │  │
 │  │  ┌─────────────────────────────────────────────────────────────┐  │  │
-│  │  │ 速度控制器 → 无人机/四足机器人                                   │  │  │
+│  │  │ 速度控制器 → 无人机/四足机器人 (Go2)                            │  │  │
 │  │  └─────────────────────────────────────────────────────────────┘  │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -139,7 +140,7 @@
 │  │ 2. 场景构建                                                   │  │
 │  │   • 生成地形和静态障碍物                                       │  │
 │  │   • 放置动态障碍物                                             │  │
-│  │   • 初始化无人机位置和目标点                                   │  │
+│  │   • 初始化 Go2 机器人位置和目标点                              │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │         ↓                                                          │
 │  ┌─────────────────────────────────────────────────────────────┐  │
@@ -239,7 +240,6 @@
 |--------|------|------|
 | **目标到达** | 距离目标 < 0.5m | 重置环境/等待新目标 |
 | **碰撞检测** | LiDAR 最小距离 < 0.3m | 终止回合/紧急停止 |
-| **高度越界** | z < 0.2m 或 z > 4.0m | 终止回合 |
 | **超时** | 步数 > 最大回合长度 | 截断回合 |
 | **动态障碍物** | 检测到移动障碍物 | 更新动态障碍物状态 |
 
@@ -250,129 +250,72 @@
 ### 项目目录树
 
 ```
-NavRL-main/
-├── media/                             # 演示媒体文件
-├── isaac-training/                    # Isaac Sim 训练模块
-│   ├── setup.sh                       # 训练环境安装脚本
-│   ├── setup_deployment.sh            # 部署环境安装脚本
-│   │
-│   ├── training/                      # 核心训练代码
-│   │   ├── cfg/                       # 配置文件
-│   │   │   ├── train.yaml             # 主训练配置
-│   │   │   ├── ppo.yaml               # PPO 算法配置
-│   │   │   ├── drone.yaml             # 无人机配置
-│   │   │   └── sim.yaml               # 仿真配置
-│   │   │
-│   │   └── scripts/                   # 训练脚本
-│   │       ├── train.py               # 训练主程序
-│   │       ├── env.py                 # 导航环境定义
-│   │       ├── ppo.py                 # PPO 算法实现
-│   │       ├── eval.py                # 评估脚本
-│   │       └── utils.py               # 工具函数
-│   │
-│   └── third_party/                   # 第三方依赖
-│       ├── OmniDrones/                # 无人机仿真框架
-│       │   ├── omni_drones/           # 核心模块
-│       │   │   ├── envs/              # 环境定义
-│       │   │   ├── learning/          # 学习算法
-│       │   │   ├── robots/            # 机器人模型
-│       │   │   └── utils/             # 工具函数
-│       │   ├── cfg/                   # 配置文件
-│       │   └── scripts/               # 脚本
-│       │
-│       ├── orbit/                     # Isaac Orbit 框架
-│       │   ├── source/                # 源代码
-│       │   └── docker/                # Docker 配置
-│       │
-│       ├── rl/                        # TorchRL 强化学习库
-│       │   ├── torchrl/               # 核心模块
-│       │   │   ├── collectors/        # 数据收集器
-│       │   │   ├── envs/              # 环境接口
-│       │   │   ├── modules/           # 神经网络模块
-│       │   │   ├── objectives/        # 损失函数
-│       │   │   └── trainers/          # 训练器
-│       │   └── examples/              # 示例代码
-│       │
-│       ├── tensordict/                # TensorDict 数据结构
-│       │   └── tensordict/            # 核心实现
-│       │
-│       └── warp/                      # NVIDIA Warp 加速库
-│           └── warp/                  # 核心模块
+NNNNavRL/
+├── .trae/                              # Trae IDE 配置
+│   └── specs/                          # 规范文档
+│       ├── implement-go2robot-class/   # Go2Robot 实现规范
+│       └── implement-simplified-go2-robot/
 │
-├── ros2/                              # ROS2 部署模块
-│   ├── navigation_runner/             # 导航运行器
-│   │   ├── scripts/                   # Python 脚本
-│   │   │   ├── navigation_node.py     # 导航节点
-│   │   │   ├── navigation.py          # 导航逻辑
-│   │   │   ├── ppo.py                 # PPO 策略
-│   │   │   ├── pid_controller.py      # PID 控制器
-│   │   │   └── utils.py               # 工具函数
-│   │   │
-│   │   ├── cfg/                       # 配置文件
-│   │   │   ├── navigation_param.yaml  # 导航参数
-│   │   │   ├── safe_action_param.yaml # 安全动作参数
-│   │   │   └── dynamic_detector_param.yaml
-│   │   │
-│   │   ├── include/                   # C++ 头文件
-│   │   │   └── navigation_runner/
-│   │   │       ├── safeAction.h       # 安全动作模块
-│   │   │       └── solver.h           # 求解器
-│   │   │
-│   │   ├── src/                       # C++ 源文件
-│   │   │   └── safe_action_node.cpp   # 安全动作节点
-│   │   │
-│   │   ├── launch/                    # 启动文件
-│   │   │   ├── navigation.launch.py   # 导航启动
-│   │   │   ├── perception.launch.py   # 感知启动
-│   │   │   └── safe_action.launch.py  # 安全动作启动
-│   │   │
-│   │   └── ckpts/                     # 模型检查点
-│   │       └── navrl_checkpoint.pt    # 预训练模型
+├── isaac-training/                     # Isaac Sim 训练模块
+│   ├── setup.sh                        # 训练环境安装脚本
+│   ├── setup_deployment.sh             # 部署环境安装脚本
 │   │
-│   ├── map_manager/                   # 地图管理模块
-│   │   ├── include/                   # 头文件
-│   │   │   └── map_manager/
-│   │   │       ├── ESDFMap.h          # ESDF 地图
-│   │   │       ├── occupancyMap.h     # 占据栅格地图
-│   │   │       ├── clustering/        # 聚类算法
-│   │   │       └── raycast/           # 射线投射
+│   ├── training/                       # 核心训练代码
+│   │   ├── cfg/                        # 配置文件
+│   │   │   ├── train.yaml              # 主训练配置
+│   │   │   ├── ppo.yaml                # PPO 算法配置
+│   │   │   ├── go2.yaml                # Go2 机器人配置
+│   │   │   ├── drone.yaml              # 无人机配置
+│   │   │   └── sim.yaml                # 仿真配置
 │   │   │
-│   │   ├── src/                       # 源文件
-│   │   │   ├── esdf_map_node.cpp      # ESDF 节点
-│   │   │   └── occupancy_map_node.cpp # 占据地图节点
-│   │   │
-│   │   └── srv/                       # 服务定义
-│   │       ├── CheckPosCollision.srv  # 碰撞检测服务
-│   │       ├── GetStaticObstacles.srv # 获取静态障碍物
-│   │       └── RayCast.srv            # 射线投射服务
+│   │   └── scripts/                    # 训练脚本
+│   │       ├── train.py                # 训练主程序
+│   │       ├── env.py                  # 导航环境定义
+│   │       ├── ppo.py                  # PPO 算法实现
+│   │       ├── go2_robot.py            # Go2 机器人模型
+│   │       ├── go2_velocity_controller.py # 速度控制器
+│   │       ├── eval.py                 # 评估脚本
+│   │       ├── utils.py                # 工具函数
+│   │       └── utils_annotated.py      # 注释版工具函数
 │   │
-│   └── onboard_detector/              # 机载检测器
-│       ├── include/                   # 头文件
-│       │   └── onboard_detector/
-│       │       ├── dynamicDetector.h  # 动态障碍物检测
-│       │       ├── detectors/         # 检测器
-│       │       │   ├── dbscan.h       # DBSCAN 聚类
-│       │       │   └── uvDetector.h   # UV 检测器
-│       │       └── tracking/          # 跟踪算法
-│       │           └── kalmanFilter.h # 卡尔曼滤波
+│   └── third_party/                    # 第三方依赖
+│       ├── Go2/                        # Go2 机器人 USD 模型
+│       │   └── go2.usd
+│       ├── go2_description.urdf        # Go2 URDF 描述文件
 │       │
-│       ├── scripts/                   # Python 脚本
-│       │   ├── yolo_detector.py       # YOLO 检测器
-│       │   └── yolo_detector_node.py  # YOLO 检测节点
+│       ├── OmniDrones/                 # 无人机仿真框架
+│       │   ├── omni_drones/            # 核心模块
+│       │   │   ├── envs/               # 环境定义
+│       │   │   ├── learning/           # 学习算法
+│       │   │   ├── robots/             # 机器人模型
+│       │   │   ├── views/              # 视图类
+│       │   │   └── utils/              # 工具函数
+│       │   ├── cfg/                    # 配置文件
+│       │   └── scripts/                # 脚本
 │       │
-│       └── srv/                       # 服务定义
-│           └── GetDynamicObstacles.srv
+│       ├── orbit/                      # Isaac Orbit 框架
+│       │   ├── source/                 # 源代码
+│       │   │   └── extensions/
+│       │   │       └── omni.isaac.orbit_assets/
+│       │   │           └── omni/isaac/orbit_assets/
+│       │   │               └── unitree.py  # Unitree 机器人配置
+│       │   └── docker/                 # Docker 配置
+│       │
+│       ├── rl/                         # TorchRL 强化学习库
+│       │   └── torchrl/                # 核心模块
+│       │       ├── collectors/         # 数据收集器
+│       │       ├── envs/               # 环境接口
+│       │       ├── modules/            # 神经网络模块
+│       │       ├── objectives/         # 损失函数
+│       │       └── trainers/           # 训练器
+│       │
+│       ├── tensordict/                 # TensorDict 数据结构
+│       │   └── tensordict/             # 核心实现
+│       │
+│       └── warp/                       # NVIDIA Warp 加速库
+│           └── warp/                   # 核心模块
 │
-└── quick-demos/                       # 快速演示
-    ├── simple-navigation.py           # 简单导航演示
-    ├── random-navigation.py           # 随机导航演示
-    ├── multi-robot-navigation.py      # 多机器人导航演示
-    ├── agent.py                       # 智能体定义
-    ├── env.py                         # 环境定义
-    ├── ppo.py                         # PPO 策略
-    ├── utils.py                       # 工具函数
-    └── ckpts/                         # 模型检查点
-        └── navrl_checkpoint.pt        # 预训练模型
+└── PROJECT_OVERVIEW.md                 # 项目概述文档
 ```
 
 ### 核心文件说明
@@ -382,16 +325,56 @@ NavRL-main/
 | `isaac-training/training/scripts/train.py` | 训练主程序入口 |
 | `isaac-training/training/scripts/env.py` | 导航环境核心实现 |
 | `isaac-training/training/scripts/ppo.py` | PPO 算法和网络架构 |
+| `isaac-training/training/scripts/go2_robot.py` | Go2 机器人简化模型 |
+| `isaac-training/training/scripts/go2_velocity_controller.py` | 速度控制器 |
 | `isaac-training/training/cfg/train.yaml` | 主配置文件 |
-| `ros2/navigation_runner/scripts/navigation.py` | ROS2 导航逻辑 |
-| `ros2/map_manager/include/map_manager/ESDFMap.h` | ESDF 地图实现 |
-| `quick-demos/simple-navigation.py` | 快速演示入口 |
+| `isaac-training/training/cfg/go2.yaml` | Go2 机器人配置 |
 
 ---
 
 ## 关键代码/组件
 
-### 1. 导航环境 (NavigationEnv)
+### 1. Go2 机器人模型 (Go2Robot)
+
+**位置**: [isaac-training/training/scripts/go2_robot.py](isaac-training/training/scripts/go2_robot.py)
+
+**功能**: 简化版 Go2 四足机器人模型，使用刚体模型模拟，直接控制速度。
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Go2Robot 类结构                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  物理参数                                                                │
+│  ├── 质量: 6.921 kg                                                     │
+│  ├── 碰撞体积: 0.3762 × 0.0935 × 0.114 m (长×宽×高)                     │
+│  └── 惯性张量: ixx=0.02448, iyy=0.098077, izz=0.107                    │
+│                                                                         │
+│  速度限制                                                                │
+│  ├── 最大线速度: 2.0 m/s                                                │
+│  └── 最大角速度: 3.14159 rad/s                                          │
+│                                                                         │
+│  核心方法                                                                │
+│  ├── spawn(translations)      # 生成机器人实例                          │
+│  ├── initialize()             # 初始化物理属性                          │
+│  ├── apply_action(actions)    # 应用速度控制命令                        │
+│  ├── get_state()              # 获取机器人状态 [13维]                   │
+│  ├── set_world_poses()        # 设置位姿                                │
+│  ├── set_velocities()         # 设置速度                                │
+│  └── _reset_idx(env_ids)      # 重置指定环境                            │
+│                                                                         │
+│  动作空间: 3维 (Vx, Vy, Vyaw)，范围 [-1, 1]                             │
+│  状态空间: 13维 (位置3 + 四元数4 + 线速度3 + 角速度3)                   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**设计理念**:
+- 使用简化刚体模型，无需复杂的关节控制
+- 直接速度控制，适合高层导航策略训练
+- 继承自 `RobotBase`，与 OmniDrones 框架集成
+
+### 2. 导航环境 (NavigationEnv)
 
 **位置**: [isaac-training/training/scripts/env.py](isaac-training/training/scripts/env.py)
 
@@ -403,20 +386,20 @@ NavRL-main/
 │  初始化 (__init__)                                                       │
 │  ├── LiDAR 参数配置                                                     │
 │  ├── 父类初始化（Isaac Sim）                                            │
-│  ├── 无人机初始化                                                       │
+│  ├── Go2 机器人初始化                                                   │
 │  ├── LiDAR 传感器初始化                                                 │
 │  └── 状态变量初始化                                                     │
 │                                                                         │
 │  场景构建 (_design_scene)                                                │
-│  ├── 创建无人机                                                         │
+│  ├── 创建 Go2 机器人                                                    │
 │  ├── 添加光照                                                           │
 │  ├── 创建地面                                                           │
 │  ├── 生成静态障碍物地形                                                 │
 │  └── 生成动态障碍物（立方体/圆柱体）                                    │
 │                                                                         │
 │  观测计算 (_compute_state_and_obs)                                       │
-│  ├── LiDAR 扫描数据 [1, 36, 4]                                          │
-│  ├── 无人机状态 [8] (位置/距离/速度)                                    │
+│  ├── LiDAR 扫描数据 [1, 36, 3]                                          │
+│  ├── 机器人状态 [8] (位置/距离/速度)                                    │
 │  ├── 目标方向 [1, 3]                                                    │
 │  └── 动态障碍物 [N, 10] (最近5个)                                       │
 │                                                                         │
@@ -424,24 +407,22 @@ NavRL-main/
 │  ├── 速度奖励（朝向目标）                                               │
 │  ├── 安全奖励（静态障碍物）                                             │
 │  ├── 安全奖励（动态障碍物）                                             │
-│  ├── 平滑性惩罚                                                         │
-│  └── 高度惩罚                                                           │
+│  └── 平滑性惩罚                                                         │
 │                                                                         │
 │  终止条件                                                                │
 │  ├── 到达目标（距离 < 0.5m）                                            │
-│  ├── 碰撞（静态/动态障碍物）                                            │
-│  └── 高度越界（< 0.2m 或 > 4m）                                         │
+│  └── 碰撞（静态/动态障碍物）                                            │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
-**观测空间"observation"组成：**
-- "state" 无人机状态drone_state: [相对位置(3), 水平距离(1), 垂直距离(1), 速度(3)] = 8
-- "lidar" 静态障碍物状态lidar_scan：[num_envs, 1, 36, 4]，值越大表示障碍物越近
-- "direction"  [目标方向(3)]（z = 0，只考虑水平方向）
-- "dynamic_obstacle" 动态障碍物状态dyn_obs_states：[num_envs, 1, N(5), 10] -> [归一化相对位置 (3), 水平距离 (1), 垂直距离 (1), 速度 (3)，宽度类别 (1)，高度类别 (1)]
 
+**观测空间 "observation" 组成：**
+- "state" 机器人状态: [相对位置(3), x距离(1), y距离(1), 速度(3)] = 8
+- "lidar" 静态障碍物状态: [num_envs, 1, 36, 3]，值越大表示障碍物越近
+- "direction" 目标方向: [目标方向(3)]（z = 0，只考虑水平方向）
+- "dynamic_obstacle" 动态障碍物状态: [num_envs, 1, N(5), 10] -> [归一化相对位置(3), 水平距离(1), 垂直距离(1), 速度(3), 宽度类别(1), 高度类别(1)]
 
-### 2. PPO 策略网络 (PPO)
+### 3. PPO 策略网络 (PPO)
 
 **位置**: [isaac-training/training/scripts/ppo.py](isaac-training/training/scripts/ppo.py)
 
@@ -460,7 +441,7 @@ class PPO(TensorDictModuleBase):
     
     2. Actor 网络:
        - Beta 分布策略 (适用于有界动作空间)
-       - 输出: 速度指令 (vx, vy, vz)
+       - 输出: 速度指令 (vx, vy, vyaw)
     
     3. Critic 网络:
        - 价值函数估计
@@ -480,54 +461,48 @@ class PPO(TensorDictModuleBase):
 | `num_minibatches` | 16 | 小批量数量 |
 | `action_limit` | 2.0 m/s | 最大速度 |
 
-### 3. 地图管理模块 (Map Manager)
+### 4. 速度控制器 (Go2VelocityController)
 
-**位置**: [ros2/map_manager/](ros2/map_manager/)
+**位置**: [isaac-training/training/scripts/go2_velocity_controller.py](isaac-training/training/scripts/go2_velocity_controller.py)
 
-**功能**: 管理环境地图，提供碰撞检测和射线投射服务。
+**功能**: 将策略网络输出的归一化动作转换为速度命令。
 
-**Map Manager 功能包详细解读**: [map_manager.md](ros2\map_manager\README.md)
+```python
+class Go2VelocityController(nn.Module):
+    """
+    Go2 机器人速度控制器
+    
+    将归一化动作 [0, 1] 转换为实际速度命令
+    - 最大线速度: 2.0 m/s
+    - 最大角速度: 3.14 rad/s
+    """
+```
 
-### 4. 动态障碍物检测器 (Onboard Detector)
-
-**位置**: [ros2/onboard_detector/](ros2/onboard_detector/)
-
-**功能**: 实时检测和跟踪动态障碍物。
-
-**Onboard Detector 功能包详细解读**: [onboard_detector.md](ros2\onboard_detector\README.md)
-
-
-### 5. 导航执行模块 (Navigation Runner)
-
-**位置**: [ros2/navigation_runner/](ros2/navigation_runner/)
-
-**功能**: 作为连接**仿真训练**与**真实部署**的桥梁，实现基于强化学习策略的实时自主导航。
-
-**Navigation Runner 功能包详细解读**: [navigation_runner.md](ros2\navigation_runner\README.md)
-
-### 6. 坐标系转换工具
+### 5. 坐标系转换工具
 
 **位置**: [isaac-training/training/scripts/utils.py](isaac-training/training/scripts/utils.py)
 
 **功能**: 处理世界坐标系和目标坐标系之间的转换
 
-### 7. wandb记录信息
-- env_frames: 已收集的总帧数
-- rollout_fps: 数据收集速度（帧/秒）
-训练损失信息 train_loss_stats
+### 6. WandB 记录信息
+
+- **env_frames**: 已收集的总帧数
+- **rollout_fps**: 数据收集速度（帧/秒）
+
+**训练损失信息 train_loss_stats**:
 - actor_loss: Actor 损失
 - critic_loss: Critic 损失
 - entropy_loss: 熵损失
 - actor_grad_norm: Actor 梯度范数
 - critic_grad_norm: Critic 梯度范数
 - explained_var: 解释方差
-统计信息stats
+
+**统计信息 stats**:
 - return: 回合回报
 - episode_len: 回合长度
 - reach_goal: 是否到达目标
 - collision: 是否碰撞
 - truncated: 是否截断
-
 
 ---
 
@@ -538,7 +513,7 @@ class PPO(TensorDictModuleBase):
 #### 1. 强化学习训练
 
 - ✅ **PPO 算法**: 使用 Proximal Policy Optimization 进行策略训练
-- ✅ **并行环境**: 支持多达 1024 个并行环境加速训练
+- ✅ **并行环境**: 支持多并行环境加速训练
 - ✅ **自动评估**: 定期评估策略性能并记录视频
 - ✅ **检查点保存**: 自动保存训练检查点
 - ✅ **WandB 集成**: 实时监控训练过程
@@ -549,23 +524,18 @@ class PPO(TensorDictModuleBase):
 - ✅ **LiDAR 仿真**: 真实的 LiDAR 传感器模拟
 - ✅ **动态障碍物**: 支持移动障碍物的仿真
 - ✅ **地形生成**: 自动生成随机地形和障碍物
-- ✅ **多无人机**: 支持多无人机同时训练
 
 #### 3. 导航能力
 
 - ✅ **静态避障**: 避开静态障碍物
 - ✅ **动态避障**: 实时避开移动障碍物
 - ✅ **目标导航**: 自主导航到指定目标点
-- ✅ **高度控制**: 自动高度调节
-- ✅ **平滑飞行**: 生成平滑的飞行轨迹
+- ✅ **平滑控制**: 生成平滑的运动轨迹
 
-#### 4. 部署支持
+#### 4. 机器人支持
 
-- ✅ **ROS1 集成**: 支持 ROS1 Noetic 部署
-- ✅ **ROS2 集成**: 支持 ROS2 Humble 部署
-- ✅ **Gazebo 仿真**: 支持 Gazebo 仿真环境
-- ✅ **真实机器人**: 可部署到真实无人机/四足机器人
-- ✅ **多机器人**: 支持多机器人协同导航
+- ✅ **Go2 四足机器人**: 简化刚体模型，速度控制
+- ✅ **无人机**: 完整的无人机仿真模型
 
 ### 独特能力
 
@@ -592,16 +562,18 @@ Robot State ────→ MLP ─────────────┼──
 Dynamic Obs ────→ MLP ─────────────┘
 ```
 
-#### 3. 层次化安全机制
+#### 3. 简化模型训练
 
 ```
-安全机制层次:
+传统方法:
+- 完整关节控制 (12+ DOF)
+- 复杂的步态控制器
+- 训练时间长
 
-Level 1: 神经网络策略 (学习型避障)
-    ↓
-Level 2: 安全动作模块 (规则型避障)
-    ↓
-Level 3: 紧急停止 (碰撞迫在眉睫)
+NavRL 方法:
+- 简化刚体模型 (6 DOF)
+- 直接速度控制
+- 快速训练迭代
 ```
 
 ### 技术创新
@@ -613,6 +585,7 @@ Level 3: 紧急停止 (碰撞迫在眉睫)
 | **多尺度障碍物表示** | 同时处理静态和动态障碍物 | 全面感知环境 |
 | **GAE 优势估计** | 使用广义优势估计 | 降低方差,提高训练稳定性 |
 | **Value Normalization** | 价值函数归一化 | 加速训练收敛 |
+| **简化刚体模型** | 使用刚体模型替代完整关节模型 | 加速训练，简化控制 |
 
 ---
 
@@ -622,7 +595,7 @@ Level 3: 紧急停止 (碰撞迫在眉睫)
 
 | 组件 | 要求 |
 |------|------|
-| **操作系统** | Ubuntu 20.04 LTS (ROS1) / Ubuntu 22.04 LTS (ROS2) |
+| **操作系统** | Ubuntu 22.04 LTS (ROS2) |
 | **GPU** | NVIDIA GPU (推荐 RTX 4090 或更高) |
 | **CUDA** | CUDA 11.0+ |
 | **Python** | Python 3.10 |
@@ -652,73 +625,28 @@ conda activate NavRL
 
 # 2. 设置环境变量
 
-
 # 3. 安装 NavRL 训练环境
 cd NavRL/isaac-training
 bash setup.sh
 ```
 
-#### 3. ROS2 部署安装
-
-```bash
-# 1. 确保 ROS2 Humble 已安装
-# 2. 复制 ROS2 包到工作空间
-cp -r NavRL/ros2 ~/ros2_ws/src
-
-# 3. 构建
-cd ~/ros2_ws
-colcon build --symlink-install
-```
-
 ### 快速开始
 
-#### 演示 1: 简单导航
-
-```bash
-conda activate NavRL
-cd NavRL/quick-demos
-python simple-navigation.py
-```
-
-**效果**: 机器人从起点导航到固定目标点，避开静态障碍物。
-
-#### 演示 2: 随机导航
-
-```bash
-python random-navigation.py
-```
-
-**效果**: 机器人连续导航到随机生成的目标点。
-
-#### 演示 3: 多机器人导航
-
-```bash
-python multi-robot-navigation.py
-```
-
-**效果**: 多个机器人同时导航，展示多机器人协同能力。
-
-### 训练自定义模型
-
-#### 基础训练
+#### 训练 Go2 机器人导航
 
 ```bash
 conda activate NavRL
 cd NavRL/isaac-training
 
-# 使用默认参数训练 (2个无人机)
+# 使用默认参数训练
 python training/scripts/train.py
-```
 
-#### 大规模训练
-
-```bash
-# 1024个无人机, 350个静态障碍物, 80个动态障碍物
+# 大规模训练
 python training/scripts/train.py \
     headless=True \
     env.num_envs=1024 \
     env.num_obstacles=350 \
-    env_dyn.num_obstacles=80 \
+    env_dyn.num_obstacles=120 \
     wandb.mode=online
 ```
 
@@ -729,40 +657,12 @@ python training/scripts/train.py \
 | `headless` | False | 无头模式 (不显示GUI) |
 | `env.num_envs` | 2 | 并行环境数量 |
 | `env.num_obstacles` | 350 | 静态障碍物数量 |
-| `env_dyn.num_obstacles` | 80 | 动态障碍物数量 |
+| `env_dyn.num_obstacles` | 120 | 动态障碍物数量 |
 | `env_dyn.vel_range` | [0.5, 1.5] | 动态障碍物速度范围 |
 | `wandb.mode` | offline | WandB 模式 (online/offline) |
 | `max_frame_num` | 12e8 | 最大训练帧数 |
 | `eval_interval` | 1000 | 评估间隔 |
 | `save_interval` | 1000 | 保存间隔 |
-
-### ROS2 部署
-
-#### 启动导航系统
-
-```bash
-# 终端 1: 启动仿真器
-conda activate isaaclab
-cd /path/to/isaac-go2-ros2
-python isaac-go2-ros2.py
-
-# 终端 2: 启动感知模块
-ros2 launch navigation_runner perception.launch.py
-
-# 终端 3: 启动安全动作模块 (可选)
-ros2 launch navigation_runner safe_action.launch.py
-
-# 终端 4: 启动可视化
-ros2 launch navigation_runner rviz.launch.py
-
-# 终端 5: 启动导航
-conda activate NavRL
-ros2 launch navigation_runner navigation.launch.py
-```
-
-#### 设置导航目标
-
-在 RViz 中使用 `2D Nav Goal` 工具设置目标点。
 
 ### 配置文件说明
 
@@ -771,7 +671,7 @@ ros2 launch navigation_runner navigation.launch.py
 ```yaml
 headless: False                    # 无头模式
 device: "cuda:0"                   # GPU 设备
-seed: 0                            # 随机种子
+seed: 42                           # 随机种子
 
 max_frame_num: 12e8                # 最大训练帧数
 eval_interval: 1000                # 评估间隔
@@ -783,49 +683,26 @@ env:
   num_obstacles: 350               # 静态障碍物数
 
 env_dyn:
-  num_obstacles: 80                # 动态障碍物数
+  num_obstacles: 120               # 动态障碍物数
   vel_range: [0.5, 1.5]            # 速度范围
   local_range: [5.0, 5.0, 4.5]     # 运动范围
 
 wandb:
-  project: NavRL                   # 项目名
+  project: NavRLLL                 # 项目名
   name: navigation_training        # 运行名
   mode: offline                    # 模式
 ```
 
-#### PPO 配置 (ppo.yaml)
+#### Go2 配置 (go2.yaml)
 
 ```yaml
-algo:
-  feature_extractor:
-    learning_rate: 5e-4            # 特征提取器学习率
-    dyn_obs_num: 5                 # 考虑的动态障碍物数
-  
-  actor:
-    learning_rate: 5e-4            # Actor 学习率
-    clip_ratio: 0.1                # PPO 裁剪比例
-    action_limit: 2.0              # 最大速度 (m/s)
-  
-  critic:
-    learning_rate: 5e-4            # Critic 学习率
-    clip_ratio: 0.1                # 价值函数裁剪
-  
-  entropy_loss_coefficient: 1e-3   # 熵系数
-  training_frame_num: 32           # 每次收集的帧数
-  training_epoch_num: 4            # 训练轮数
-  num_minibatches: 16              # 小批量数
-```
-
-#### 传感器配置 (drone.yaml)
-
-```yaml
-drone:  
-  model_name: "hummingbird"        # 无人机模型
+go2:  
+  model_name: "go2"                # Go2 机器人模型
 
 sensor:
   lidar_range: 4.0                 # LiDAR 范围 (米)
-  lidar_vfov: [-10, 20.]           # 垂直视场角 (度)
-  lidar_vbeams: 4                  # 垂直光束数
+  lidar_vfov: [0, 20.]             # 垂直视场角 (度)
+  lidar_vbeams: 3                  # 垂直光束数
   lidar_hres: 10.0                 # 水平分辨率 (度)
 ```
 
@@ -833,26 +710,9 @@ sensor:
 
 ## 应用场景
 
-### 1. 无人机自主导航
+### 1. 四足机器人导航
 
-**场景描述**: 无人机在复杂环境中自主飞行到目标点。
-
-```
-应用示例:
-- 室内无人机巡检
-- 仓库物流无人机
-- 农业无人机作业
-- 搜救无人机
-```
-
-**优势**:
-- 实时避障能力
-- 动态环境适应
-- 无需预先建图
-
-### 2. 四足机器人导航
-
-**场景描述**: 四足机器人在室内外环境中导航。
+**场景描述**: Go2 四足机器人在复杂环境中自主导航。
 
 ```
 应用示例:
@@ -863,29 +723,29 @@ sensor:
 
 **部署案例**: Unitree Go2 四足机器人
 
-### 3. 多机器人协同
+**物理参数**:
+- 质量: 6.921 kg
+- 最大速度: 2.0 m/s
+- 最大角速度: 3.14 rad/s
 
-**场景描述**: 多个机器人协同执行任务。
+### 2. 无人机自主导航
+
+**场景描述**: 无人机在复杂环境中自主飞行到目标点。
 
 ```
 应用示例:
-- 多无人机编队
-- 多机器人探索
-- 协同运输
+- 室内无人机巡检
+- 仓库物流无人机
+- 农业无人机作业
 ```
 
-**特点**:
-- 分布式决策
-- 避免相互碰撞
-- 可扩展架构
-
-### 4. 动态环境导航
+### 3. 动态环境导航
 
 **场景描述**: 在有人、车辆等动态障碍物的环境中导航。
 
 ```
 应用示例:
-- 城市环境无人机配送
+- 城市环境导航
 - 人机共存环境导航
 - 交通场景导航
 ```
@@ -895,21 +755,6 @@ sensor:
 - 预测障碍物运动
 - 主动避让策略
 
-### 5. 未知环境探索
-
-**场景描述**: 在未知或部分未知的环境中探索。
-
-```
-应用示例:
-- 灾害现场探索
-- 未知建筑探索
-- 地下环境探索
-```
-
-**特点**:
-- 无需预先地图
-- 实时环境感知
-- 安全探索策略
 ---
 
 ## 技术亮点与创新
@@ -917,19 +762,6 @@ sensor:
 ### 1. 目标坐标系表示法
 
 **创新点**: 在目标方向坐标系中表示所有状态和动作。
-
-**技术细节**:
-```
-传统方法:
-- 在世界坐标系中表示
-- 需要学习旋转不变性
-- 泛化能力受限
-
-NavRL 方法:
-- 在目标坐标系中表示
-- 天然旋转不变
-- 更强的泛化能力
-```
 
 **优势**:
 - ✅ 提高样本效率
@@ -940,114 +772,52 @@ NavRL 方法:
 
 **创新点**: 使用 Beta 分布而非高斯分布建模动作分布。
 
-**数学原理**:
-```
-高斯分布:
-- 支持域: (-∞, +∞)
-- 需要额外裁剪
-- 边界处概率密度不自然
-
-Beta 分布:
-- 支持域: [0, 1]
-- 天然有界
-- 边界处概率密度可控
-```
-
-**实现**:
-```python
-class BetaActor(nn.Module):
-    def forward(self, features):
-        alpha = 1. + self.alpha_softplus(self.alpha_layer(features))
-        beta = 1. + self.beta_softplus(self.beta_layer(features))
-        return alpha, beta
-```
-
 **优势**:
 - ✅ 无需动作裁剪
 - ✅ 更好的探索
 - ✅ 更稳定的训练
 
-### 3. 多尺度障碍物感知
+### 3. 简化刚体模型
+
+**创新点**: 使用简化刚体模型替代完整关节模型。
+
+```
+传统方法:
+- 12+ 自由度关节控制
+- 复杂步态控制器
+- 长训练时间
+
+NavRL 方法:
+- 6 自由度刚体模型
+- 直接速度控制
+- 快速训练迭代
+```
+
+**优势**:
+- ✅ 大幅加速训练
+- ✅ 简化控制问题
+- ✅ 专注高层导航策略
+
+### 4. 多尺度障碍物感知
 
 **创新点**: 同时感知静态和动态障碍物。
-
-**架构**:
-```
-静态障碍物感知:
-├── LiDAR 扫描
-├── CNN 特征提取
-└── 全局障碍物表示
-
-动态障碍物感知:
-├── 最近 N 个动态障碍物
-├── 位置、速度、大小
-└── MLP 特征提取
-
-融合:
-└── 特征拼接 → 共享特征层
-```
 
 **优势**:
 - ✅ 全面的环境感知
 - ✅ 区分静态/动态障碍物
 - ✅ 高效的信息利用
 
-### 4. 层次化安全机制
-
-**创新点**: 多层安全机制确保导航安全。
-
-```
-层次结构:
-
-┌─────────────────────────────────────┐
-│ Layer 1: 学习型策略                  │
-│ - 神经网络输出速度指令                │
-│ - 学习到的避障行为                    │
-│ - 适用于常规情况                      │
-└─────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────┐
-│ Layer 2: 规则型安全模块               │
-│ - 碰撞预测                            │
-│ - 速度修正                            │
-│ - 适用于学习策略失效情况               │
-└─────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────┐
-│ Layer 3: 紧急停止                    │
-│ - 即时碰撞检测                        │
-│ - 立即停止                            │
-│ - 最后一道防线                        │
-└─────────────────────────────────────┘
-```
-
-**优势**:
-- ✅ 多重安全保障
-- ✅ 处理极端情况
-- ✅ 可部署到真实机器人
-
 ### 5. 高效的并行训练
 
 **创新点**: 大规模并行环境训练。
 
-**技术**:
 ```
 并行策略:
-- 1024 个并行环境
+- 多个并行环境
 - GPU 加速仿真
 - 批量数据处理
 - 异步数据收集
-
-效率提升:
-- 训练速度: ~10000 FPS
-- 样本效率: 12e8 frames
-- 训练时间: ~24 小时 (RTX 4090)
 ```
-
-**优势**:
-- ✅ 快速迭代
-- ✅ 大规模经验收集
-- ✅ 高效利用 GPU
 
 ### 6. 奖励函数设计
 
@@ -1061,47 +831,8 @@ reward = (
     + reward_safety_static * 1.0  # 静态障碍物安全奖励
     + reward_safety_dynamic * 1.0 # 动态障碍物安全奖励
     - penalty_smooth * 0.1        # 动作平滑性惩罚
-    - penalty_height * 8.0        # 高度惩罚
 )
-
-# 各项奖励计算
-reward_vel = (drone_vel * goal_direction).sum()  # 沿目标方向的速度
-reward_safety = log(distance_to_obstacle)         # 安全距离的对数
-penalty_smooth = ||current_vel - prev_vel||       # 速度变化
-penalty_height = (height - target_height)^2       # 高度偏差
 ```
-
-**设计原则**:
-- ✅ 鼓励目标导向行为
-- ✅ 惩罚危险行为
-- ✅ 促进平滑控制
-- ✅ 平衡多目标
-
-### 7. Sim-to-Real 迁移
-
-**创新点**: 从仿真到真实世界的无缝迁移。
-
-```
-迁移策略:
-
-仿真训练:
-├── 高保真物理仿真
-├── 真实传感器模型
-├── 域随机化
-└── 噪声注入
-
-部署适配:
-├── 传感器校准
-├── 坐标系对齐
-├── 安全模块
-└── 实时性能优化
-```
-
-**关键技术**:
-- LiDAR 仿真模型匹配真实传感器
-- 动力学模型校准
-- 安全层保障
-- 实时推理优化
 
 ---
 
@@ -1114,8 +845,6 @@ penalty_height = (height - target_height)^2       # 高度偏差
 | **训练帧率** | ~10000 FPS (1024 envs) |
 | **收敛时间** | ~24 小时 (RTX 4090) |
 | **样本效率** | 12e8 frames |
-| **成功率** | > 95% (静态环境) |
-| **成功率** | > 85% (动态环境) |
 
 ### 导航性能
 
@@ -1129,30 +858,8 @@ penalty_height = (height - target_height)^2       # 高度偏差
 
 ---
 
-## 引用与参考
-
-如果您在研究中使用 NavRL，请引用:
-
-```bibtex
-@ARTICLE{NavRL,
-  author={Xu, Zhefan and Han, Xinming and Shen, Haoyu and Jin, Hanyu and Shimada, Kenji},
-  journal={IEEE Robotics and Automation Letters}, 
-  title={NavRL: Learning Safe Flight in Dynamic Environments}, 
-  year={2025},
-  volume={10},
-  number={4},
-  pages={3668-3675},
-  doi={10.1109/LRA.2025.3546069}
-}
-```
-
-**相关链接**:
-- [IEEE Xplore](https://ieeexplore.ieee.org/document/10904341)
-- [arXiv Preprint](https://arxiv.org/pdf/2409.15634)
-- [YouTube Demo](https://youtu.be/EbeJW8-YlvI)
-- [BiliBili Demo](https://www.bilibili.com/video/BV1gsA9eTErz/)
 
 ---
-**文档版本**: 1.0  
-**最后更新**: 2025-03-14  
+**文档版本**: 2.0  
+**最后更新**: 2025-04-01  
 **维护者**: NavRL 开发团队
