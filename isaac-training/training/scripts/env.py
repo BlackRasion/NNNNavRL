@@ -10,71 +10,63 @@ Go2 机器人导航强化学习环境
 - 多模态观测（LiDAR + 内部状态 + 动态障碍物）
 - 目标坐标系下的旋转不变性
 """
-"""
-Navigation Environment for Go2 Robot Navigation with Reinforcement Learning
-Go2 机器人导航强化学习环境
 
-该文件实现了 NavigationEnv 类，是 NavRL 项目的核心环境模块。
-基于 NVIDIA Isaac Sim 仿真平台，支持：
-- Go2 四足机器人物理仿真
-- LiDAR 传感器模拟
-- 静态和动态障碍物
-- 多模态观测（LiDAR + 内部状态 + 动态障碍物）
-- 目标坐标系下的旋转不变性
-
-主要功能模块：
-1. 场景构建：机器人、地形、障碍物、围墙
-2. 传感器模拟：LiDAR 射线检测
-3. 状态观测：多模态观测空间
-4. 奖励计算：速度、进度、安全、平滑性
-5. 终止条件：碰撞、到达目标、超时
-"""
 import torch
 import einops
 import numpy as np
 import time
 from typing import List, Tuple
 from tensordict.tensordict import TensorDict, TensorDictBase
-from torchrl.data import UnboundedContinuousTensorSpec, CompositeSpec, DiscreteTensorSpec
+from torchrl.data import (
+    UnboundedContinuousTensorSpec,
+    CompositeSpec,
+    DiscreteTensorSpec,
+)
 from omni_drones.envs.isaac_env import IsaacEnv
 import omni.isaac.orbit.sim as sim_utils
 from omni.isaac.orbit.assets import AssetBaseCfg, RigidObject, RigidObjectCfg
-from omni.isaac.orbit.terrains import TerrainImporterCfg, TerrainImporter, TerrainGeneratorCfg, HfDiscreteObstaclesTerrainCfg
+from omni.isaac.orbit.terrains import (
+    TerrainImporterCfg,
+    TerrainImporter,
+    TerrainGeneratorCfg,
+    HfDiscreteObstaclesTerrainCfg,
+)
 from omni_drones.utils.torch import euler_to_quaternion
 from omni.isaac.orbit.sensors import RayCaster, RayCasterCfg, patterns
 import omni.isaac.core.utils.prims as prim_utils
 from go2_robot import Go2Robot
 from utils import vec_to_new_frame, construct_input
 
+
 class NavigationEnv(IsaacEnv):
     """
     导航环境类 - Go2机器人强化学习训练环境
-    
+
     继承自 IsaacEnv，实现 Go2 四足机器人在复杂动态环境中的自主导航任务。
     该环境支持多环境并行仿真，提供多模态观测空间和丰富的奖励信号。
-    
+
     核心特性：
     -----------
     1. **多模态观测**：
        - LiDAR点云数据（36x3分辨率，4m探测范围）
        - 机器人内部状态（相对位置、速度等）
        - 动态障碍物状态（位置、速度、尺寸）
-    
+
     2. **动态环境**：
        - 静态障碍物地形（随机生成的立方体障碍物）
        - 动态障碍物（立方体和圆柱体，自主运动）
        - 边界围墙（防止机器人绕行）
-    
+
     3. **目标坐标系**：
        - 所有观测转换到目标坐标系，实现旋转不变性
        - 便于策略学习，提高泛化能力
-    
+
     4. **奖励设计**：
        - 速度奖励：鼓励朝向目标移动
        - 进度奖励：减小与目标的距离
        - 安全奖励：避免与障碍物碰撞
        - 平滑性惩罚：减少剧烈动作变化
-    
+
     仿真步骤流程：
     --------------
     1. `_pre_sim_step`: 应用动作到机器人
@@ -82,7 +74,7 @@ class NavigationEnv(IsaacEnv):
     3. `_post_sim_step`: 更新LiDAR传感器、移动动态障碍物
     4. `_compute_state_and_obs`: 计算观测和状态
     5. `_compute_reward_and_done`: 计算奖励和终止条件
-    
+
     属性：
     ------
     - go2: Go2机器人实例
@@ -96,7 +88,7 @@ class NavigationEnv(IsaacEnv):
     def __init__(self, cfg: object):
         """
         初始化导航环境
-        
+
         参数：
         ------
         cfg : object
@@ -107,39 +99,37 @@ class NavigationEnv(IsaacEnv):
             - cfg.env_dyn: 动态障碍物配置
             - cfg.headless: 是否无头模式运行
         """
-        print("[Navigation Environment]: 环境初始化中...")
-        
         # =========================================================================
         # LiDAR 传感器参数配置
         # =========================================================================
         # 探测范围：LiDAR能检测到的最远距离（米）
         self.lidar_range = cfg.sensor.lidar_range
-        
+
         # 垂直视场角：限制在[0, 89]度范围内，避免无效角度
         # cfg.sensor.lidar_vfov: [最小角度, 最大角度]
         self.lidar_vfov = (
-            max(0., cfg.sensor.lidar_vfov[0]), 
-            min(89., cfg.sensor.lidar_vfov[1])
+            max(0.0, cfg.sensor.lidar_vfov[0]),
+            min(89.0, cfg.sensor.lidar_vfov[1]),
         )
-        
+
         # 垂直光束数：垂直方向的激光射线数量
         self.lidar_vbeams = cfg.sensor.lidar_vbeams
-        
+
         # 水平分辨率：相邻射线间的角度间隔（度）
         self.lidar_hres = cfg.sensor.lidar_hres
-        
+
         # 水平光束数：360度 / 水平分辨率
         self.lidar_hbeams = int(360 / self.lidar_hres)
 
         # 调用父类初始化（创建仿真世界、场景等）
         super().__init__(cfg, cfg.headless)
-        
+
         # =========================================================================
         # Go2 机器人初始化
         # =========================================================================
         # 初始化机器人控制器和状态
         self.go2.initialize()
-        
+
         # 初始速度张量（用于重置时设置零速度）
         self.init_vels = torch.zeros_like(self.go2.get_velocities())
 
@@ -158,36 +148,39 @@ class NavigationEnv(IsaacEnv):
             pattern_cfg=patterns.BpearlPatternCfg(
                 horizontal_res=self.lidar_hres,  # 水平分辨率
                 # 垂直角度分布：在vfov范围内均匀分布vbeams条射线
-                vertical_ray_angles=torch.linspace(*self.lidar_vfov, self.lidar_vbeams)
+                vertical_ray_angles=torch.linspace(*self.lidar_vfov, self.lidar_vbeams),
             ),
             debug_vis=False,  # 不显示调试可视化
             mesh_prim_paths=["/World/ground"],  # 检测地面网格
         )
-        
+
         # 创建 LiDAR 传感器实例
         self.lidar = RayCaster(ray_caster_cfg)
         self.lidar._initialize_impl()
-        
+
         # LiDAR 分辨率：(水平光束数, 垂直光束数)
-        self.lidar_resolution = (self.lidar_hbeams, self.lidar_vbeams) 
-        
+        self.lidar_resolution = (self.lidar_hbeams, self.lidar_vbeams)
+
         # =========================================================================
         # 状态变量初始化
         # =========================================================================
         with torch.device(self.device):
             # 目标位置：世界坐标系 [num_envs, 1, 3]
             self.target_pos = torch.zeros(self.num_envs, 1, 3)
-            
+
             # 目标方向向量：用于坐标变换 [num_envs, 1, 3]
             self.target_dir = torch.zeros(self.num_envs, 1, 3)
-            
+
             # 上一时刻机器人速度：用于计算平滑性奖励 [num_envs, 1, 3]
             self.prev_robot_vel_w = torch.zeros(self.num_envs, 1, 3)
+
+            # 奖励：初始化为零 [num_envs, 1]
+            self.reward = torch.zeros(self.num_envs, 1)
 
     def _design_scene(self):
         """
         设计仿真场景
-        
+
         创建完整的仿真环境，包括：
         1. Go2 机器人
         2. 光照系统
@@ -195,7 +188,7 @@ class NavigationEnv(IsaacEnv):
         4. 静态障碍物地形
         5. 边界围墙
         6. 动态障碍物（可选）
-        
+
         返回：
         --------
         list
@@ -215,32 +208,31 @@ class NavigationEnv(IsaacEnv):
         light = AssetBaseCfg(
             prim_path="/World/light",
             spawn=sim_utils.DistantLightCfg(
-                color=(0.75, 0.75, 0.75),  # 浅灰色光
-                intensity=3000.0            # 光照强度
+                color=(0.75, 0.75, 0.75), intensity=3000.0  # 浅灰色光  # 光照强度
             ),
         )
-        
+
         # 环境光：模拟天空散射光（穹顶光）
         sky_light = AssetBaseCfg(
             prim_path="/World/skyLight",
             spawn=sim_utils.DomeLightCfg(
-                color=(0.2, 0.2, 0.3),  # 深蓝灰色
-                intensity=2000.0
+                color=(0.2, 0.2, 0.3), intensity=2000.0  # 深蓝灰色
             ),
         )
-        
+
         # 生成光源
         light.spawn.func(light.prim_path, light.spawn, light.init_state.pos)
         sky_light.spawn.func(sky_light.prim_path, sky_light.spawn)
-        
+
         # =========================================================================
         # 3. 创建地平面
         # =========================================================================
         cfg_ground = sim_utils.GroundPlaneCfg(
-            color=(0.1, 0.1, 0.1),  # 深灰色地面
-            size=(300., 300.)       # 300m x 300m
+            color=(0.1, 0.1, 0.1), size=(300.0, 300.0)  # 深灰色地面  # 300m x 300m
         )
-        cfg_ground.func("/World/defaultGroundPlane", cfg_ground, translation=(0, 0, 0.01))
+        cfg_ground.func(
+            "/World/defaultGroundPlane", cfg_ground, translation=(0, 0, 0.01)
+        )
 
         # =========================================================================
         # 4. 创建带静态障碍物的地形
@@ -256,15 +248,15 @@ class NavigationEnv(IsaacEnv):
             terrain_type="generator",
             terrain_generator=TerrainGeneratorCfg(
                 seed=0,  # 随机种子（固定以确保可重复性）
-                size=(self.map_range[0]*2, self.map_range[1]*2),  # 地形尺寸
-                border_width=5.0,      # 边界宽度
-                num_rows=1,            # 地形行数
-                num_cols=1,            # 地形列数
+                size=(self.map_range[0] * 2, self.map_range[1] * 2),  # 地形尺寸
+                border_width=5.0,  # 边界宽度
+                num_rows=1,  # 地形行数
+                num_cols=1,  # 地形列数
                 horizontal_scale=0.1,  # 水平缩放
-                vertical_scale=0.1,    # 垂直缩放
+                vertical_scale=0.1,  # 垂直缩放
                 slope_threshold=0.75,  # 坡度阈值
-                use_cache=False,       # 不使用缓存
-                color_scheme="height", # 颜色方案：按高度着色
+                use_cache=False,  # 不使用缓存
+                color_scheme="height",  # 颜色方案：按高度着色
                 sub_terrains={
                     "obstacles": HfDiscreteObstaclesTerrainCfg(
                         horizontal_scale=0.1,
@@ -295,7 +287,7 @@ class NavigationEnv(IsaacEnv):
         # - 阻止机器人通过边界区域的无障碍空间绕行
         # - 强制机器人穿越障碍物区域，增加任务难度
         # - 围墙高度与最高障碍物一致（6.0米），避免引入额外干扰
-        
+
         self._create_boundary_walls()
 
         # 更新有效导航区域（围墙内部）
@@ -307,13 +299,13 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         if self.cfg.env_dyn.num_obstacles == 0:
             return
-        
+
         self._create_dynamic_obstacles()
-    
+
     def _create_boundary_walls(self):
         """
         创建边界围墙
-        
+
         创建四面围墙完全包围障碍物区域，防止机器人绕行。
         围墙参数：
         - 高度：6.0米（与最高障碍物一致）
@@ -321,31 +313,47 @@ class NavigationEnv(IsaacEnv):
         - 材质：与地面一致（深灰色）
         """
         # 围墙参数
-        wall_height = 6.0      # 围墙高度（米）
-        wall_thickness = 0.3   # 围墙厚度（米）
+        wall_height = 6.0  # 围墙高度（米）
+        wall_thickness = 0.3  # 围墙厚度（米）
         wall_position = self.map_range[0] + 3  # 围墙位置（距离中心）
-        wall_length = wall_position * 2        # 围墙长度
-        
+        wall_length = wall_position * 2  # 围墙长度
+
         # 围墙材质配置（与地面颜色一致）
         wall_material = sim_utils.PreviewSurfaceCfg(
             diffuse_color=(0.1, 0.1, 0.1),
             metallic=0.0,
         )
-        
+
         # 围墙碰撞属性配置
         wall_collision = sim_utils.CollisionPropertiesCfg(
             collision_enabled=True,
         )
-        
+
         # 创建四面围墙的配置列表
         # 每个元素：(名称, 尺寸, 位置)
         walls_config = [
-            ("wall_north", [wall_length, wall_thickness, wall_height], (0.0, wall_position, wall_height / 2.0)),
-            ("wall_south", [wall_length, wall_thickness, wall_height], (0.0, -wall_position, wall_height / 2.0)),
-            ("wall_east", [wall_thickness, wall_length, wall_height], (wall_position, 0.0, wall_height / 2.0)),
-            ("wall_west", [wall_thickness, wall_length, wall_height], (-wall_position, 0.0, wall_height / 2.0)),
+            (
+                "wall_north",
+                [wall_length, wall_thickness, wall_height],
+                (0.0, wall_position, wall_height / 2.0),
+            ),
+            (
+                "wall_south",
+                [wall_length, wall_thickness, wall_height],
+                (0.0, -wall_position, wall_height / 2.0),
+            ),
+            (
+                "wall_east",
+                [wall_thickness, wall_length, wall_height],
+                (wall_position, 0.0, wall_height / 2.0),
+            ),
+            (
+                "wall_west",
+                [wall_thickness, wall_length, wall_height],
+                (-wall_position, 0.0, wall_height / 2.0),
+            ),
         ]
-        
+
         # 批量创建围墙
         for wall_name, wall_size, wall_translation in walls_config:
             wall_cfg = sim_utils.CuboidCfg(
@@ -358,15 +366,15 @@ class NavigationEnv(IsaacEnv):
                 wall_cfg,
                 translation=wall_translation,
             )
-    
+
     def _create_dynamic_obstacles(self):
         """
         创建动态障碍物
-        
+
         动态障碍物分类：
         - 3D 障碍物：立方体，可在空中漂浮
         - 2D 障碍物：圆柱体，只能水平移动
-        
+
         尺寸分类：
         - 宽度分为 N_w=4 个区间: [0, 0.25], [0.25, 0.50], [0.50, 0.75], [0.75, 1.0]
         - 高度分为 N_h=2 个区间: [0, 0.5], [0.5, inf]（区分3D和2D障碍物）
@@ -375,75 +383,81 @@ class NavigationEnv(IsaacEnv):
         N_w = 4  # 宽度区间数
         N_h = 2  # 高度区间数
         max_obs_width = 1.0  # 最大宽度（米）
-        
+
         # 3D和2D障碍物的高度限制
-        self.max_obs_3d_height = 1.0   # 3D障碍物最大高度
-        self.max_obs_2d_height = 5.0   # 2D障碍物最大高度
-        
+        self.max_obs_3d_height = 1.0  # 3D障碍物最大高度
+        self.max_obs_2d_height = 5.0  # 2D障碍物最大高度
+
         # 宽度分辨率：每个宽度区间的宽度
         self.dyn_obs_width_res = max_obs_width / float(N_w)
-        
+
         # 障碍物类别总数
         dyn_obs_category_num = N_w * N_h
-        
+
         # 每个类别的障碍物数量
-        self.dyn_obs_num_of_each_category = int(self.cfg.env_dyn.num_obstacles / dyn_obs_category_num)
-        
+        self.dyn_obs_num_of_each_category = int(
+            self.cfg.env_dyn.num_obstacles / dyn_obs_category_num
+        )
+
         # 确保障碍物总数是类别数的整数倍
-        self.cfg.env_dyn.num_obstacles = self.dyn_obs_num_of_each_category * dyn_obs_category_num
+        self.cfg.env_dyn.num_obstacles = (
+            self.dyn_obs_num_of_each_category * dyn_obs_category_num
+        )
 
         # =========================================================================
         # 初始化动态障碍物状态变量
         # =========================================================================
         # 障碍物状态：[位置(3), 四元数(4), 速度(3), 角速度(3)] = 13维
         self.dyn_obs_state = torch.zeros(
-            (self.cfg.env_dyn.num_obstacles, 13), 
-            dtype=torch.float, 
-            device=self.cfg.device
+            (self.cfg.env_dyn.num_obstacles, 13),
+            dtype=torch.float,
+            device=self.cfg.device,
         )
         # 四元数 w 分量初始化为1（无旋转）
         self.dyn_obs_state[:, 3] = 1.0
-        
+
         # 障碍物目标位置：用于随机运动
         self.dyn_obs_goal = torch.zeros(
-            (self.cfg.env_dyn.num_obstacles, 3), 
-            dtype=torch.float, 
-            device=self.cfg.device
+            (self.cfg.env_dyn.num_obstacles, 3),
+            dtype=torch.float,
+            device=self.cfg.device,
         )
-        
+
         # 障碍物原点位置：障碍物在原点附近运动
         self.dyn_obs_origin = torch.zeros(
-            (self.cfg.env_dyn.num_obstacles, 3), 
-            dtype=torch.float, 
-            device=self.cfg.device
+            (self.cfg.env_dyn.num_obstacles, 3),
+            dtype=torch.float,
+            device=self.cfg.device,
         )
-        
+
         # 障碍物速度
         self.dyn_obs_vel = torch.zeros(
-            (self.cfg.env_dyn.num_obstacles, 3), 
-            dtype=torch.float, 
-            device=self.cfg.device
+            (self.cfg.env_dyn.num_obstacles, 3),
+            dtype=torch.float,
+            device=self.cfg.device,
         )
-        
+
         # 步数计数器
         self.dyn_obs_step_count = 0
-        
+
         # 障碍物尺寸：[宽度, 深度, 高度]
         self.dyn_obs_size = torch.zeros(
-            (self.cfg.env_dyn.num_obstacles, 3), 
-            dtype=torch.float, 
-            device=self.device
+            (self.cfg.env_dyn.num_obstacles, 3), dtype=torch.float, device=self.device
         )
 
         # =========================================================================
         # 生成障碍物位置
         # =========================================================================
         # 计算期望的障碍物间距（基于均匀分布假设）
-        obs_dist = 2 * np.sqrt(self.map_range[0] * self.map_range[1] / self.cfg.env_dyn.num_obstacles)
+        obs_dist = 2 * np.sqrt(
+            self.map_range[0] * self.map_range[1] / self.cfg.env_dyn.num_obstacles
+        )
         prev_pos_list = []
-        
+
         # 各类别的障碍物数量
-        cuboid_category_num = cylinder_category_num = int(dyn_obs_category_num / N_h)  # 各4类
+        cuboid_category_num = cylinder_category_num = int(
+            dyn_obs_category_num / N_h
+        )  # 各4类
 
         # 为每个类别生成障碍物
         for category_idx in range(cuboid_category_num + cylinder_category_num):
@@ -451,38 +465,39 @@ class NavigationEnv(IsaacEnv):
             for origin_idx in range(self.dyn_obs_num_of_each_category):
                 # 随机采样位置，确保障碍物之间保持一定距离
                 ox, oy, oz = self._sample_obstacle_position(
-                    category_idx, 
-                    cuboid_category_num, 
-                    prev_pos_list, 
-                    obs_dist
+                    category_idx, cuboid_category_num, prev_pos_list, obs_dist
                 )
-                
+
                 # 保存障碍物原点和初始位置
                 origin = [ox, oy, oz]
                 idx = origin_idx + category_idx * self.dyn_obs_num_of_each_category
-                self.dyn_obs_origin[idx] = torch.tensor(origin, dtype=torch.float, device=self.cfg.device)
-                self.dyn_obs_state[idx, :3] = torch.tensor(origin, dtype=torch.float, device=self.cfg.device)
-                
+                self.dyn_obs_origin[idx] = torch.tensor(
+                    origin, dtype=torch.float, device=self.cfg.device
+                )
+                self.dyn_obs_state[idx, :3] = torch.tensor(
+                    origin, dtype=torch.float, device=self.cfg.device
+                )
+
                 # 创建障碍物的父节点
                 prim_utils.create_prim(
-                    f"/World/Origin{idx}", 
-                    "Xform", 
-                    translation=origin
+                    f"/World/Origin{idx}", "Xform", translation=origin
                 )
 
             # 根据类别创建不同形状的障碍物
-            self._create_obstacle_by_category(category_idx, cuboid_category_num, max_obs_width, N_w)
-    
+            self._create_obstacle_by_category(
+                category_idx, cuboid_category_num, max_obs_width, N_w
+            )
+
     def _sample_obstacle_position(
-        self, 
-        category_idx: int, 
-        cuboid_category_num: int, 
-        prev_pos_list: List[np.ndarray], 
-        obs_dist: float
+        self,
+        category_idx: int,
+        cuboid_category_num: int,
+        prev_pos_list: List[np.ndarray],
+        obs_dist: float,
     ) -> Tuple[float, float, float]:
         """
         采样障碍物位置，确保障碍物之间保持一定距离
-        
+
         参数：
         ----------
         category_idx : int
@@ -493,7 +508,7 @@ class NavigationEnv(IsaacEnv):
             已生成的障碍物位置列表
         obs_dist : float
             期望的障碍物间距
-        
+
         返回：
         ----------
         Tuple[float, float, float]
@@ -501,12 +516,12 @@ class NavigationEnv(IsaacEnv):
         """
         start_time = time.time()
         curr_obs_dist = obs_dist  # 当前障碍物间距阈值
-        
+
         while True:
             # 随机采样 x, y 坐标
             ox = np.random.uniform(low=-self.map_range[0], high=self.map_range[0])
             oy = np.random.uniform(low=-self.map_range[1], high=self.map_range[1])
-            
+
             # 根据类别确定 z 坐标
             if category_idx < cuboid_category_num:
                 # 3D 障碍物：z 坐标随机
@@ -514,31 +529,30 @@ class NavigationEnv(IsaacEnv):
             else:
                 # 2D 障碍物：z 坐标固定在中间高度
                 oz = self.max_obs_2d_height / 2.0
-            
+
             # 检查与已有障碍物的距离
             curr_pos = np.array([ox, oy])
-            valid = self._check_position_validity(prev_pos_list, curr_pos, curr_obs_dist)
-            
+            valid = self._check_position_validity(
+                prev_pos_list, curr_pos, curr_obs_dist
+            )
+
             # 如果超时，降低距离要求
             curr_time = time.time()
             if curr_time - start_time > 0.1:
                 curr_obs_dist *= 0.8
                 start_time = time.time()
-            
+
             # 如果位置有效，返回
             if valid:
                 prev_pos_list.append(curr_pos)
                 return ox, oy, oz
-    
+
     def _check_position_validity(
-        self, 
-        prev_pos_list: List[np.ndarray], 
-        curr_pos: np.ndarray, 
-        min_dist: float
+        self, prev_pos_list: List[np.ndarray], curr_pos: np.ndarray, min_dist: float
     ) -> bool:
         """
         检查位置是否满足最小距离要求
-        
+
         参数：
         ----------
         prev_pos_list : List[np.ndarray]
@@ -547,7 +561,7 @@ class NavigationEnv(IsaacEnv):
             当前候选位置
         min_dist : float
             最小距离阈值
-        
+
         返回：
         ----------
         bool
@@ -557,17 +571,17 @@ class NavigationEnv(IsaacEnv):
             if np.linalg.norm(curr_pos - prev_pos) <= min_dist:
                 return False
         return True
-    
+
     def _create_obstacle_by_category(
-        self, 
-        category_idx: int, 
-        cuboid_category_num: int, 
-        max_obs_width: float, 
-        N_w: int
+        self,
+        category_idx: int,
+        cuboid_category_num: int,
+        max_obs_width: float,
+        N_w: int,
     ):
         """
         根据类别创建障碍物
-        
+
         参数：
         ----------
         category_idx : int
@@ -580,23 +594,24 @@ class NavigationEnv(IsaacEnv):
             宽度区间数
         """
         # 障碍物列表
-        self.dyn_obs_list = getattr(self, 'dyn_obs_list', [])
-        
+        self.dyn_obs_list = getattr(self, "dyn_obs_list", [])
+
         if category_idx < cuboid_category_num:
             # 创建 3D 立方体障碍物
             obs_width = float(category_idx + 1) * max_obs_width / float(N_w)
             obs_height = self.max_obs_3d_height
-            
+
             cuboid_cfg = RigidObjectCfg(
                 prim_path=f"/World/Origin{construct_input(category_idx*self.dyn_obs_num_of_each_category, (category_idx+1)*self.dyn_obs_num_of_each_category)}/Cuboid",
                 spawn=sim_utils.CuboidCfg(
                     size=[obs_width, obs_width, self.max_obs_3d_height],
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(),
                     mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-                    collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                    collision_props=sim_utils.CollisionPropertiesCfg(
+                        collision_enabled=False
+                    ),
                     visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.0, 1.0, 0.0),  # 绿色
-                        metallic=0.2
+                        diffuse_color=(0.0, 1.0, 0.0), metallic=0.2  # 绿色
                     ),
                 ),
                 init_state=RigidObjectCfg.InitialStateCfg(),
@@ -604,10 +619,15 @@ class NavigationEnv(IsaacEnv):
             dynamic_obstacle = RigidObject(cfg=cuboid_cfg)
         else:
             # 创建 2D 圆柱体障碍物
-            radius = float(category_idx - cuboid_category_num + 1) * max_obs_width / float(N_w) / 2.0
+            radius = (
+                float(category_idx - cuboid_category_num + 1)
+                * max_obs_width
+                / float(N_w)
+                / 2.0
+            )
             obs_width = radius * 2
             obs_height = self.max_obs_2d_height
-            
+
             cylinder_cfg = RigidObjectCfg(
                 prim_path=f"/World/Origin{construct_input(category_idx*self.dyn_obs_num_of_each_category, (category_idx+1)*self.dyn_obs_num_of_each_category)}/Cylinder",
                 spawn=sim_utils.CylinderCfg(
@@ -615,30 +635,37 @@ class NavigationEnv(IsaacEnv):
                     height=self.max_obs_2d_height,
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(),
                     mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-                    collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+                    collision_props=sim_utils.CollisionPropertiesCfg(
+                        collision_enabled=False
+                    ),
                     visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.0, 1.0, 0.0),  # 绿色
-                        metallic=0.2
+                        diffuse_color=(0.0, 1.0, 0.0), metallic=0.2  # 绿色
                     ),
                 ),
                 init_state=RigidObjectCfg.InitialStateCfg(),
             )
             dynamic_obstacle = RigidObject(cfg=cylinder_cfg)
-        
+
         # 添加到障碍物列表
         self.dyn_obs_list.append(dynamic_obstacle)
-        
+
         # 设置障碍物尺寸
         self.dyn_obs_size[
-            category_idx * self.dyn_obs_num_of_each_category : (category_idx + 1) * self.dyn_obs_num_of_each_category
-        ] = torch.tensor([obs_width, obs_width, obs_height], dtype=torch.float, device=self.cfg.device)
+            category_idx
+            * self.dyn_obs_num_of_each_category : (category_idx + 1)
+            * self.dyn_obs_num_of_each_category
+        ] = torch.tensor(
+            [obs_width, obs_width, obs_height],
+            dtype=torch.float,
+            device=self.cfg.device,
+        )
 
     def move_dynamic_obstacle(self):
         """
         移动动态障碍物
-        
+
         每个障碍物在局部范围内随机移动，模拟动态环境中的移动障碍物。
-        
+
         运动逻辑：
         ----------
         1. **目标采样**：当障碍物接近当前目标时，在局部范围内随机采样新目标
@@ -646,7 +673,7 @@ class NavigationEnv(IsaacEnv):
         3. **位置更新**：根据速度和时间步长更新位置
         4. **边界限制**：确保障碍物在地图范围内
         5. **同步仿真**：将更新后的状态同步到仿真器进行可视化
-        
+
         参数配置：
         ----------
         - cfg.env_dyn.local_range: 局部运动范围 [x, y, z]
@@ -659,59 +686,59 @@ class NavigationEnv(IsaacEnv):
         # 计算当前位置与目标的距离
         if self.dyn_obs_step_count != 0:
             dyn_obs_goal_dist = torch.sqrt(
-                torch.sum((self.dyn_obs_state[:, :3] - self.dyn_obs_goal)**2, dim=1)
+                torch.sum((self.dyn_obs_state[:, :3] - self.dyn_obs_goal) ** 2, dim=1)
             )
         else:
             # 初始时刻距离设为0，避免立即采样新目标
             dyn_obs_goal_dist = torch.zeros(
-                self.dyn_obs_state.size(0), 
-                device=self.cfg.device
+                self.dyn_obs_state.size(0), device=self.cfg.device
             )
-        
+
         # 距离小于阈值（0.5米）则需要新目标
         dyn_obs_new_goal_mask = dyn_obs_goal_dist < 0.5
         num_new_goal = torch.sum(dyn_obs_new_goal_mask)
-        
+
         # 在局部范围内随机采样新目标
         # 局部范围：相对于原点的偏移量
-        sample_x_local = (
-            -self.cfg.env_dyn.local_range[0] 
-            + 2.0 * self.cfg.env_dyn.local_range[0] * torch.rand(num_new_goal, 1, dtype=torch.float, device=self.cfg.device)
+        sample_x_local = -self.cfg.env_dyn.local_range[
+            0
+        ] + 2.0 * self.cfg.env_dyn.local_range[0] * torch.rand(
+            num_new_goal, 1, dtype=torch.float, device=self.cfg.device
         )
-        sample_y_local = (
-            -self.cfg.env_dyn.local_range[1] 
-            + 2.0 * self.cfg.env_dyn.local_range[1] * torch.rand(num_new_goal, 1, dtype=torch.float, device=self.cfg.device)
+        sample_y_local = -self.cfg.env_dyn.local_range[
+            1
+        ] + 2.0 * self.cfg.env_dyn.local_range[1] * torch.rand(
+            num_new_goal, 1, dtype=torch.float, device=self.cfg.device
         )
-        sample_z_local = (
-            -self.cfg.env_dyn.local_range[2] 
-            + 2.0 * self.cfg.env_dyn.local_range[2] * torch.rand(num_new_goal, 1, dtype=torch.float, device=self.cfg.device)
+        sample_z_local = -self.cfg.env_dyn.local_range[
+            2
+        ] + 2.0 * self.cfg.env_dyn.local_range[2] * torch.rand(
+            num_new_goal, 1, dtype=torch.float, device=self.cfg.device
         )
-        sample_goal_local = torch.cat([sample_x_local, sample_y_local, sample_z_local], dim=1)
-    
+        sample_goal_local = torch.cat(
+            [sample_x_local, sample_y_local, sample_z_local], dim=1
+        )
+
         # 将局部目标转换到全局坐标
         self.dyn_obs_goal[dyn_obs_new_goal_mask] = (
             self.dyn_obs_origin[dyn_obs_new_goal_mask] + sample_goal_local
         )
-        
+
         # 限制在地图范围内
         self.dyn_obs_goal[:, 0] = torch.clamp(
-            self.dyn_obs_goal[:, 0], 
-            min=-self.map_range[0], 
-            max=self.map_range[0]
+            self.dyn_obs_goal[:, 0], min=-self.map_range[0], max=self.map_range[0]
         )
         self.dyn_obs_goal[:, 1] = torch.clamp(
-            self.dyn_obs_goal[:, 1], 
-            min=-self.map_range[1], 
-            max=self.map_range[1]
+            self.dyn_obs_goal[:, 1], min=-self.map_range[1], max=self.map_range[1]
         )
         self.dyn_obs_goal[:, 2] = torch.clamp(
-            self.dyn_obs_goal[:, 2], 
-            min=0.0, 
-            max=self.map_range[2]
+            self.dyn_obs_goal[:, 2], min=0.0, max=self.map_range[2]
         )
-        
+
         # 2D 障碍物（后半部分）z坐标固定在中间高度
-        self.dyn_obs_goal[int(self.dyn_obs_goal.size(0)/2):, 2] = self.max_obs_2d_height / 2.0
+        self.dyn_obs_goal[int(self.dyn_obs_goal.size(0) / 2) :, 2] = (
+            self.max_obs_2d_height / 2.0
+        )
 
         # =========================================================================
         # 步骤2：每约2秒随机改变速度
@@ -719,16 +746,18 @@ class NavigationEnv(IsaacEnv):
         update_interval = int(2.0 / self.cfg.sim.dt)  # 更新间隔（步数）
         if self.dyn_obs_step_count % update_interval == 0:
             # 随机采样速度大小
-            self.dyn_obs_vel_norm = (
-                self.cfg.env_dyn.vel_range[0] 
-                + (self.cfg.env_dyn.vel_range[1] - self.cfg.env_dyn.vel_range[0]) 
-                * torch.rand(self.dyn_obs_vel.size(0), 1, dtype=torch.float, device=self.cfg.device)
+            self.dyn_obs_vel_norm = self.cfg.env_dyn.vel_range[0] + (
+                self.cfg.env_dyn.vel_range[1] - self.cfg.env_dyn.vel_range[0]
+            ) * torch.rand(
+                self.dyn_obs_vel.size(0), 1, dtype=torch.float, device=self.cfg.device
             )
-            
+
             # 计算速度方向（朝向目标）
             direction_to_goal = self.dyn_obs_goal - self.dyn_obs_state[:, :3]
-            direction_normalized = direction_to_goal / torch.norm(direction_to_goal, dim=1, keepdim=True)
-            
+            direction_normalized = direction_to_goal / torch.norm(
+                direction_to_goal, dim=1, keepdim=True
+            ).clamp_min(1e-6)
+
             # 速度 = 速度大小 × 方向
             self.dyn_obs_vel = self.dyn_obs_vel_norm * direction_normalized
 
@@ -745,7 +774,7 @@ class NavigationEnv(IsaacEnv):
             # 获取该类别的障碍物状态
             start_idx = category_idx * self.dyn_obs_num_of_each_category
             end_idx = (category_idx + 1) * self.dyn_obs_num_of_each_category
-            
+
             # 写入状态到仿真器
             dynamic_obstacle.write_root_state_to_sim(
                 self.dyn_obs_state[start_idx:end_idx]
@@ -759,29 +788,31 @@ class NavigationEnv(IsaacEnv):
     def _set_specs(self):
         """
         定义观测、动作、奖励等空间规格
-        
+
         TorchRL 使用这些规格来验证数据形状和类型，确保数据一致性。
-        
+
         观测空间组成：
         --------------
-        1. **state**: Go2机器人内部状态 (8维)
-           - 相对位置归一化向量 (3维)
-           - x方向距离 (1维)
-           - y方向距离 (1维)
-           - 速度向量 (3维)
-        
+        1. **state**: Go2机器人内部状态 (8维) ← 优化：从13维减少到8维
+           - 相对位置归一化向量 (2维) ← 优化：只保留水平方向
+           - 水平距离 (1维) ← 优化：合并x/y距离
+           - 速度向量 (2维) ← 优化：只保留水平速度
+           - 机器人朝向yaw角 (1维)
+           - 目标相对角度 (1维)
+           - yaw角速度 (1维) ← 优化：只保留yaw角速度
+
         2. **lidar**: LiDAR扫描数据 (1×36×3)
            - 1个通道
            - 36个水平光束
            - 3个垂直光束
-        
+
         3. **direction**: 目标方向向量 (3维)
            - 用于坐标变换
-        
+
         4. **dynamic_obstacle**: 动态障碍物状态 (1×N×10)
            - N个最近障碍物
            - 每个障碍物10维状态
-        
+
         动作空间：
         ----------
         - Go2机器人动作空间 (3维速度控制)
@@ -790,121 +821,194 @@ class NavigationEnv(IsaacEnv):
           - 旋转速度
         """
         # 观测维度定义
-        observation_dim = 8  # Go2机器人内部状态维度
+        observation_dim = 8  # Go2机器人内部状态维度（优化：从13减少到8）
         num_dim_each_dyn_obs_state = 10  # 每个动态障碍物的状态维度
 
         # =========================================================================
         # 观测空间格式定义
         # =========================================================================
-        self.observation_spec = CompositeSpec({
-            "agents": CompositeSpec({
-                "observation": CompositeSpec({
-                    # Go2机器人内部状态
-                    # [相对位置(3), x距离(1), y距离(1), 速度(3)] = 8维
-                    "state": UnboundedContinuousTensorSpec(
-                        (observation_dim,), 
-                        device=self.device
-                    ),
-                    
-                    # LiDAR扫描数据
-                    # [1, 36, 3] (通道, 水平光束, 垂直光束)
-                    "lidar": UnboundedContinuousTensorSpec(
-                        (1, self.lidar_hbeams, self.lidar_vbeams), 
-                        device=self.device
-                    ),
-                    
-                    # 目标方向向量（用于坐标变换）
-                    "direction": UnboundedContinuousTensorSpec(
-                        (1, 3), 
-                        device=self.device
-                    ),
-                    
-                    # 动态障碍物状态
-                    # [1, N, 10] (N=最近障碍物数)
-                    "dynamic_obstacle": UnboundedContinuousTensorSpec(
-                        (1, self.cfg.algo.feature_extractor.dyn_obs_num, num_dim_each_dyn_obs_state), 
-                        device=self.device
-                    ),
-                }),
-            }).expand(self.num_envs)
-        }, shape=[self.num_envs], device=self.device)
-        
+        self.observation_spec = CompositeSpec(
+            {
+                "agents": CompositeSpec(
+                    {
+                        "observation": CompositeSpec(
+                            {
+                                # Go2机器人内部状态（优化：8维）
+                                # [相对位置(2), 水平距离(1), 速度(2), 朝向(1), 目标角度(1), yaw角速度(1)] = 8维
+                                "state": UnboundedContinuousTensorSpec(
+                                    (observation_dim,), device=self.device
+                                ),
+                                # LiDAR扫描数据
+                                # [1, 36, 3] (通道, 水平光束, 垂直光束)
+                                "lidar": UnboundedContinuousTensorSpec(
+                                    (1, self.lidar_hbeams, self.lidar_vbeams),
+                                    device=self.device,
+                                ),
+                                # 目标方向向量（用于坐标变换）
+                                "direction": UnboundedContinuousTensorSpec(
+                                    (1, 3), device=self.device
+                                ),
+                                # 动态障碍物状态
+                                # [1, N, 10] (N=最近障碍物数)
+                                "dynamic_obstacle": UnboundedContinuousTensorSpec(
+                                    (
+                                        1,
+                                        self.cfg.algo.feature_extractor.dyn_obs_num,
+                                        num_dim_each_dyn_obs_state,
+                                    ),
+                                    device=self.device,
+                                ),
+                            }
+                        ),
+                    }
+                ).expand(self.num_envs)
+            },
+            shape=[self.num_envs],
+            device=self.device,
+        )
+
         # =========================================================================
         # 动作空间格式定义
         # =========================================================================
-        self.action_spec = CompositeSpec({
-            "agents": CompositeSpec({
-                # Go2机器人动作空间 (3维速度控制)
-                "action": self.go2.action_spec,
-            })
-        }).expand(self.num_envs).to(self.device)
-        
+        self.action_spec = (
+            CompositeSpec(
+                {
+                    "agents": CompositeSpec(
+                        {
+                            # Go2机器人动作空间 (3维速度控制)
+                            "action": self.go2.action_spec,
+                        }
+                    )
+                }
+            )
+            .expand(self.num_envs)
+            .to(self.device)
+        )
+
         # =========================================================================
         # 奖励空间格式定义
         # =========================================================================
-        self.reward_spec = CompositeSpec({
-            "agents": CompositeSpec({
-                "reward": UnboundedContinuousTensorSpec((1,))
-            })
-        }).expand(self.num_envs).to(self.device)
+        self.reward_spec = (
+            CompositeSpec(
+                {
+                    "agents": CompositeSpec(
+                        {"reward": UnboundedContinuousTensorSpec((1,))}
+                    )
+                }
+            )
+            .expand(self.num_envs)
+            .to(self.device)
+        )
 
         # =========================================================================
         # 终止条件空间定义
         # =========================================================================
-        self.done_spec = CompositeSpec({
-            # 是否结束（终止或截断）
-            "done": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
-            
-            # 是否终止（碰撞）
-            "terminated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
-            
-            # 是否截断（超时）
-            "truncated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
-        }).expand(self.num_envs).to(self.device)
+        self.done_spec = (
+            CompositeSpec(
+                {
+                    # 是否结束（终止或截断）
+                    "done": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
+                    # 是否终止（碰撞）
+                    "terminated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
+                    # 是否截断（超时）
+                    "truncated": DiscreteTensorSpec(2, (1,), dtype=torch.bool),
+                }
+            )
+            .expand(self.num_envs)
+            .to(self.device)
+        )
 
         # =========================================================================
         # 统计信息空间定义
         # =========================================================================
-        stats_spec = CompositeSpec({
-            "return": UnboundedContinuousTensorSpec(1),        # 回合累积回报
-            "episode_len": UnboundedContinuousTensorSpec(1),   # 回合长度（步数）
-            "reach_goal": UnboundedContinuousTensorSpec(1),    # 是否到达目标
-            "collision": UnboundedContinuousTensorSpec(1),     # 是否发生碰撞
-            "truncated": UnboundedContinuousTensorSpec(1),     # 是否截断
-        }).expand(self.num_envs).to(self.device)
+        stats_spec = (
+            CompositeSpec(
+                {
+                    "return": UnboundedContinuousTensorSpec((1,)),  # 回合累积回报
+                    "episode_len": UnboundedContinuousTensorSpec(
+                        (1,)
+                    ),  # 回合长度（步数）
+                    "reach_goal": UnboundedContinuousTensorSpec((1,)),  # 是否到达目标
+                    "collision": UnboundedContinuousTensorSpec((1,)),  # 是否发生碰撞
+                    "truncated": UnboundedContinuousTensorSpec((1,)),  # 是否截断
+                    "reward_progress": UnboundedContinuousTensorSpec((1,)),
+                    "reward_velocity": UnboundedContinuousTensorSpec((1,)),
+                    "reward_safety_static": UnboundedContinuousTensorSpec((1,)),
+                    "reward_safety_dynamic": UnboundedContinuousTensorSpec((1,)),
+                    "reward_angular_penalty": UnboundedContinuousTensorSpec((1,)),
+                    "reward_heading": UnboundedContinuousTensorSpec((1,)),
+                }
+            )
+            .expand(self.num_envs)
+            .to(self.device)
+        )
 
         # =========================================================================
         # 额外信息空间定义
         # =========================================================================
-        info_spec = CompositeSpec({
-            # 机器人完整状态 [位置(3), 四元数(4), 速度(3), 角速度(3)]
-            "robot_state": UnboundedContinuousTensorSpec(
-                (1, 13), 
-                device=self.device
-            ),
-        }).expand(self.num_envs).to(self.device)
-        
+        info_spec = (
+            CompositeSpec(
+                {
+                    # 机器人完整状态 [位置(3), 四元数(4), 速度(3), 角速度(3)]
+                    "robot_state": UnboundedContinuousTensorSpec(
+                        (1, 13), device=self.device
+                    ),
+                }
+            )
+            .expand(self.num_envs)
+            .to(self.device)
+        )
+
         # 将 stats 和 info 添加到观测规格中
         self.observation_spec["stats"] = stats_spec
         self.observation_spec["info"] = info_spec
-        
-        # 初始化统计和信息张量
-        self.stats = stats_spec.zero()
-        self.info = info_spec.zero()
+
+        # 初始化统计和信息张量（手动初始化以确保形状正确）
+        self.stats = TensorDict(
+            {
+                "return": torch.zeros(self.num_envs, 1, device=self.device),
+                "episode_len": torch.zeros(self.num_envs, 1, device=self.device),
+                "reach_goal": torch.zeros(self.num_envs, 1, device=self.device),
+                "collision": torch.zeros(self.num_envs, 1, device=self.device),
+                "truncated": torch.zeros(self.num_envs, 1, device=self.device),
+                "reward_progress": torch.zeros(self.num_envs, 1, device=self.device),
+                "reward_velocity": torch.zeros(self.num_envs, 1, device=self.device),
+                "reward_safety_static": torch.zeros(
+                    self.num_envs, 1, device=self.device
+                ),
+                "reward_safety_dynamic": torch.zeros(
+                    self.num_envs, 1, device=self.device
+                ),
+                "reward_angular_penalty": torch.zeros(
+                    self.num_envs, 1, device=self.device
+                ),
+                "reward_heading": torch.zeros(self.num_envs, 1, device=self.device),
+            },
+            batch_size=[self.num_envs],
+            device=self.device,
+        )
+
+        self.info = TensorDict(
+            {
+                "robot_state": torch.zeros(self.num_envs, 1, 13, device=self.device),
+            },
+            batch_size=[self.num_envs],
+            device=self.device,
+        )
 
     def reset_target(self, env_ids: torch.Tensor):
         """
         重置目标位置
-        
+
         根据训练或评估模式设置目标位置：
         - 训练模式：随机生成目标位置（四个方向之一）
         - 评估模式：固定目标位置（用于对比算法性能）
-        
+
         参数：
         ----------
         env_ids : torch.Tensor
             需要重置的环境 ID 张量
-        
+
         目标位置设计：
         --------------
         训练模式下，目标点限制在围墙内部（±18米范围内）：
@@ -915,44 +1019,49 @@ class NavigationEnv(IsaacEnv):
         if self.training:
             # 训练模式：随机选择四个方向之一
             # 目标点和起始点限制在围墙内部（±18米范围内）
-            
+
             # 掩码：控制 x/y/z 哪个方向有偏移
-            # [1, 0, 1]: x方向随机, y固定, z随机
-            # [0, 1, 1]: x固定, y方向随机, z随机
+            # [1, 0, 1]: x方向随机, y固定, z固定
+            # [0, 1, 1]: x固定, y方向随机, z固定
             masks = torch.tensor(
-                [[1., 0., 1.], [1., 0., 1.], [0., 1., 1.], [0., 1., 1.]], 
-                dtype=torch.float, 
-                device=self.device
+                [[1.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
+                dtype=torch.float,
+                device=self.device,
             )
-            
+
             # 基础偏移位置（调整到围墙内部）
             # [0, 16, 0]: 前方16米
             # [0, -16, 0]: 后方16米
             # [16, 0, 0]: 右方16米
             # [-16, 0, 0]: 左方16米
             shifts = torch.tensor(
-                [[0., 16., 0.], [0., -16., 0.], [16., 0., 0.], [-16., 0., 0.]], 
-                dtype=torch.float, 
-                device=self.device
+                [
+                    [0.0, 16.0, 0.0],
+                    [0.0, -16.0, 0.0],
+                    [16.0, 0.0, 0.0],
+                    [-16.0, 0.0, 0.0],
+                ],
+                dtype=torch.float,
+                device=self.device,
             )
-            
+
             # 随机选择方向
             mask_indices = np.random.randint(0, masks.size(0), size=env_ids.size(0))
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
-            
+
             # 在围墙内部随机生成位置（范围：±18米）
             target_pos = 36.0 * torch.rand(
                 env_ids.size(0), 1, 3, dtype=torch.float, device=self.device
-            ) + (-18.)
-            
-            # 高度在 [0.5, 2.5] 米范围内随机
-            heights = 0.5 + torch.rand(env_ids.size(0), dtype=torch.float, device=self.device) * (2.5 - 0.5)
-            target_pos[:, 0, 2] = heights
-            
+            ) + (-18.0)
+
+            # 高度固定为机器人质心高度（0.5米）
+            # 这样到达目标的判断只与水平距离有关，与高度无关
+            target_pos[:, 0, 2] = 0.5
+
             # 应用掩码和偏移
             target_pos = target_pos * selected_masks + selected_shifts
-            
+
             # 设置目标位置
             self.target_pos[env_ids] = target_pos
         else:
@@ -961,18 +1070,18 @@ class NavigationEnv(IsaacEnv):
             self.target_pos[:, 0, 0] = torch.linspace(-0.5, 0.5, self.num_envs) * 22.5
             # y坐标：固定在-22.5米
             self.target_pos[:, 0, 1] = -22.5
-            # z坐标：固定在2米高度
-            self.target_pos[:, 0, 2] = 2.0
+            # z坐标：固定在机器人质心高度
+            self.target_pos[:, 0, 2] = 0.5
 
     def _reset_idx(self, env_ids: torch.Tensor):
         """
         重置指定的 Go2 机器人状态
-        
+
         重置内容包括：
         1. 机器人物理状态（位置、姿态、速度）
         2. 目标位置
         3. 统计信息
-        
+
         参数：
         ----------
         env_ids : torch.Tensor
@@ -980,23 +1089,28 @@ class NavigationEnv(IsaacEnv):
         """
         # 重置 Go2 机器人物理状态
         self.go2._reset_idx(env_ids, self.training)
-        
+
         # 重置目标位置
         self.reset_target(env_ids)
-        
+
         if self.training:
             # 训练模式：随机生成起始位置（与目标类似，限制在围墙内部）
             masks = torch.tensor(
-                [[1., 0., 1.], [1., 0., 1.], [0., 1., 1.], [0., 1., 1.]], 
-                dtype=torch.float, 
-                device=self.device
+                [[1.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
+                dtype=torch.float,
+                device=self.device,
             )
             shifts = torch.tensor(
-                [[0., 16., 0.], [0., -16., 0.], [16., 0., 0.], [-16., 0., 0.]], 
-                dtype=torch.float, 
-                device=self.device
+                [
+                    [0.0, 16.0, 0.0],
+                    [0.0, -16.0, 0.0],
+                    [16.0, 0.0, 0.0],
+                    [-16.0, 0.0, 0.0],
+                ],
+                dtype=torch.float,
+                device=self.device,
             )
-            
+
             mask_indices = np.random.randint(0, masks.size(0), size=env_ids.size(0))
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
@@ -1004,12 +1118,14 @@ class NavigationEnv(IsaacEnv):
             # 随机生成起始位置（范围：±18米）
             pos = 36.0 * torch.rand(
                 env_ids.size(0), 1, 3, dtype=torch.float, device=self.device
-            ) + (-18.)
-            
+            ) + (-18.0)
+
             # 高度在 [0.4, 0.6] 米范围内随机（地面机器人）
-            heights = 0.4 + torch.rand(env_ids.size(0), dtype=torch.float, device=self.device) * (0.6 - 0.4)
+            heights = 0.4 + torch.rand(
+                env_ids.size(0), dtype=torch.float, device=self.device
+            ) * (0.6 - 0.4)
             pos[:, 0, 2] = heights
-            
+
             # 应用掩码和偏移
             pos = pos * selected_masks + selected_shifts
         else:
@@ -1021,55 +1137,53 @@ class NavigationEnv(IsaacEnv):
             pos[:, 0, 1] = 22.5
             # z坐标：固定在0.4米高度
             pos[:, 0, 2] = 0.4
-        
+
         # 坐标变换：计算目标方向（用于后续坐标变换）
         self.target_dir[env_ids] = self.target_pos[env_ids] - pos
 
         # 设置机器人朝向：面向目标
         rpy = torch.zeros(len(env_ids), 1, 3, device=self.device)
         diff = self.target_pos[env_ids] - pos
-        
+
         # 计算偏航角（水平面内朝向目标）
         facing_yaw = torch.atan2(diff[..., 1], diff[..., 0])
         rpy[..., 2] = facing_yaw
-        
+
         # 欧拉角转四元数
         rot = euler_to_quaternion(rpy)
-        
+
         # 设置机器人位姿和速度
         self.go2.set_world_poses(pos, rot, env_ids)
         self.go2.set_velocities(self.init_vels[env_ids], env_ids)
-        
+
         # 重置速度记录
         self.prev_robot_vel_w[env_ids] = 0.0
-        
+
         # 重置统计信息
-        self.stats[env_ids] = 0.0  
-        
+        self.stats[env_ids] = 0.0
+
     def _pre_sim_step(self, tensordict: TensorDictBase):
         """
         仿真步前处理：应用动作到机器人
-        
+
         在物理引擎推进仿真之前调用，将策略网络输出的动作应用到机器人。
-        
+
         参数：
         ----------
         tensordict : TensorDictBase
             包含动作数据的张量字典
             - tensordict[("agents", "action")]: 机器人动作 [num_envs, action_dim]
         """
-        # 从张量字典中提取动作
         actions = tensordict[("agents", "action")]
-        
-        # 应用动作到 Go2 机器人
-        self.go2.apply_action(actions)
+        emergency_stop = tensordict.get(("agents", "emergency_stop"), None)
+        self.go2.apply_action(actions, emergency_stop=emergency_stop)
 
     def _post_sim_step(self, tensordict: TensorDictBase):
         """
         仿真步后处理：更新传感器和动态障碍物
-        
+
         在物理引擎推进仿真之后调用，更新传感器状态和移动动态障碍物。
-        
+
         参数：
         ----------
         tensordict : TensorDictBase
@@ -1078,14 +1192,14 @@ class NavigationEnv(IsaacEnv):
         # 如果启用了动态障碍物，移动它们
         if self.cfg.env_dyn.num_obstacles != 0:
             self.move_dynamic_obstacle()
-        
+
         # 更新 LiDAR 传感器状态
         self.lidar.update(self.dt)
-    
+
     def _compute_state_and_obs(self):
         """
         计算观测和状态（核心函数）
-        
+
         这是环境的核心函数，负责：
         1. 获取机器人状态
         2. 计算 LiDAR 观测
@@ -1094,7 +1208,7 @@ class NavigationEnv(IsaacEnv):
         5. 计算奖励
         6. 判断终止条件
         7. 更新统计信息
-        
+
         返回：
         ----------
         TensorDict
@@ -1102,19 +1216,19 @@ class NavigationEnv(IsaacEnv):
             - agents/observation: 策略网络输入
             - stats: 训练统计信息
             - info: 额外信息（用于控制器）
-        
+
         观测空间详解：
         --------------
         1. **LiDAR观测**：
            - 格式：[num_envs, 1, 36, 3]
            - 值：探测距离（值越大表示障碍物越近）
            - 用途：感知周围障碍物分布
-        
+
         2. **机器人状态**：
            - 格式：[num_envs, 8]
-           - 内容：[相对位置归一化(3), x距离(1), y距离(1), 速度(3)]
+           - 内容：[相对位置归一化(2), 水平距离(1), 水平速度(2), yaw(1), 目标相对角(1), yaw角速度(1)]
            - 坐标系：目标坐标系（旋转不变）
-        
+
         3. **动态障碍物状态**：
            - 格式：[num_envs, 1, N, 10]
            - 内容：[相对位置归一化(3), 水平距离(1), 垂直距离(1), 速度(3), 宽度类别(1), 高度类别(1)]
@@ -1125,7 +1239,7 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 根状态：[世界位置(3), 姿态四元数(4), 世界速度(3), 角速度(3), ...]
         self.root_state = self.go2.get_state(env_frame=False)
-        
+
         # 保存前13维用于额外信息（供控制器使用）
         self.info["robot_state"][:] = self.root_state[..., :13]
 
@@ -1138,37 +1252,95 @@ class NavigationEnv(IsaacEnv):
         # 计算每个射线击中点的距离
         self.lidar_scan = self.lidar_range - (
             (self.lidar.data.ray_hits_w - self.lidar.data.pos_w.unsqueeze(1))
-            .norm(dim=-1)   # 计算距离
+            .norm(dim=-1)  # 计算距离
             .clamp_max(self.lidar_range)  # 限制最大距离
-            .reshape(self.num_envs, 1, *self.lidar_resolution)  # reshape为[num_envs, 1, 36, 3]
+            .reshape(
+                self.num_envs, 1, *self.lidar_resolution
+            )  # reshape为[num_envs, 1, 36, 3]
+        )
+        self.lidar_scan = torch.nan_to_num(
+            self.lidar_scan, nan=0.0, posinf=0.0, neginf=0.0
         )
         # 结果：值越大表示障碍物越近（探测范围 - 实际距离）
 
         # =========================================================================
-        # 步骤3：计算机器人内部状态观测
+        # 步骤3：计算机器人内部状态观测（优化：减少状态维度）
         # =========================================================================
-        # a. 距离信息
+        # 控制形式：，只需要水平面信息
+
+        # a. 距离信息（优化：只计算水平距离）
         rpos = self.target_pos - self.root_state[..., :3]  # 相对位置向量
-        distance = rpos.norm(dim=-1, keepdim=True)         # 总距离
-        distance_x = rpos[..., 0].unsqueeze(-1)            # x方向距离
-        distance_y = rpos[..., 1].unsqueeze(-1)            # y方向距离
-        
+
+        # 优化：水平距离计算（忽略高度，减少计算量）
+        rpos_2d = rpos[..., :2]  # 只取 x, y 分量
+        distance_2d = rpos_2d.norm(dim=-1, keepdim=True)  # 水平距离
+
         # b. 目标方向（用于坐标变换）
         target_dir_2d = self.target_dir.clone()
         target_dir_2d[..., 2] = 0  # 只考虑水平方向
 
         # c. 单位方向向量（世界坐标 -> 目标坐标系）
-        # 归一化相对位置向量
-        rpos_clipped = rpos / distance.clamp(1e-6)
+        # 优化：只计算水平方向的归一化向量
+        rpos_clipped = rpos_2d / distance_2d.clamp(1e-6)  # 只归一化水平分量
+        # 扩展到3D（z分量为0）
+        rpos_clipped_3d = torch.cat(
+            [rpos_clipped, torch.zeros_like(rpos_clipped[..., :1])], dim=-1
+        )
         # 转换到目标坐标系
-        rpos_clipped_g = vec_to_new_frame(rpos_clipped, target_dir_2d)
+        rpos_clipped_g = vec_to_new_frame(rpos_clipped_3d, target_dir_2d)
+        # 优化：只保留水平分量（2维）
+        rpos_clipped_g_2d = rpos_clipped_g[..., :2]
 
         # d. 速度（世界坐标 -> 目标坐标系）
         vel_w = self.root_state[..., 7:10]  # 世界坐标系下的速度
         vel_g = vec_to_new_frame(vel_w, target_dir_2d)  # 转换到目标坐标系
+        # 优化：只保留水平速度（2维）
+        vel_g_2d = vel_g[..., :2]
 
-        # 组合机器人状态：[相对位置(3), x距离(1), y距离(1), 速度(3)] = 8维
-        robot_state = torch.cat([rpos_clipped_g, distance_x, distance_y, vel_g], dim=-1).squeeze(1)
+        # =========================================================================
+        # 新增：计算机器人朝向和目标相对角度
+        # =========================================================================
+        # e. 计算机器人朝向（yaw角）
+        # 四元数转欧拉角（yaw）
+        # yaw = atan2(2*(w*z + x*y), 1 - 2*(y^2 + z^2))
+        robot_quat = self.root_state[..., 3:7]  # [w, x, y, z]
+        robot_yaw = torch.atan2(
+            2.0
+            * (
+                robot_quat[..., 0] * robot_quat[..., 3]
+                + robot_quat[..., 1] * robot_quat[..., 2]
+            ),
+            1.0 - 2.0 * (robot_quat[..., 2] ** 2 + robot_quat[..., 3] ** 2),
+        )
+
+        # f. 计算目标相对角度（目标方向 - 机器人朝向）
+        # 优化：只计算水平方向的角度
+        # 目标方向角度（水平面内）
+        target_angle_world = torch.atan2(rpos_2d[..., 1], rpos_2d[..., 0])
+        # 目标相对角度（在机器人坐标系中）
+        target_angle_relative = target_angle_world - robot_yaw
+        # 归一化到 [-pi, pi]
+        target_angle_relative = torch.atan2(
+            torch.sin(target_angle_relative), torch.cos(target_angle_relative)
+        )
+
+        # g. yaw角速度（优化：只保留yaw角速度）
+        angular_vel_yaw = self.root_state[..., 12]  # 只取yaw角速度 (wz)
+
+        # 组合机器人状态（优化：8维）
+        # [相对位置(2), 水平距离(1), 速度(2), 朝向(1), 目标角度(1), yaw角速度(1)] = 8维
+        robot_state = torch.cat(
+            [
+                rpos_clipped_g_2d,  # 相对位置 (2) ← 优化：只保留水平分量
+                distance_2d,  # 水平距离 (1) ← 优化：合并x/y距离
+                vel_g_2d,  # 速度 (2) ← 优化：只保留水平速度
+                robot_yaw.unsqueeze(-1),  # 机器人朝向 (1)
+                target_angle_relative.unsqueeze(-1),  # 目标相对角度 (1)
+                angular_vel_yaw.unsqueeze(-1),  # yaw角速度 (1) ← 优化：只保留yaw
+            ],
+            dim=-1,
+        ).squeeze(1)
+        robot_state = torch.nan_to_num(robot_state, nan=0.0, posinf=0.0, neginf=0.0)
 
         # =========================================================================
         # 步骤4：计算动态障碍物观测（如果启用）
@@ -1176,44 +1348,56 @@ class NavigationEnv(IsaacEnv):
         if self.cfg.env_dyn.num_obstacles != 0:
             # a. 找到最近的 N 个障碍物
             # 扩展障碍物位置维度以便广播计算
-            dyn_obs_pos_expanded = self.dyn_obs_state[..., :3].unsqueeze(0).repeat(self.num_envs, 1, 1)
-            
+            dyn_obs_pos_expanded = (
+                self.dyn_obs_state[..., :3].unsqueeze(0).repeat(self.num_envs, 1, 1)
+            )
+
             # 计算相对位置
-            dyn_obs_rpos_expanded = dyn_obs_pos_expanded[..., :3] - self.root_state[..., :3]
-            
+            dyn_obs_rpos_expanded = (
+                dyn_obs_pos_expanded[..., :3] - self.root_state[..., :3]
+            )
+
             # 2D障碍物高度设为0（只考虑水平距离）
-            dyn_obs_rpos_expanded[:, int(self.dyn_obs_state.size(0)/2):, 2] = 0.0
-            
+            dyn_obs_rpos_expanded[:, int(self.dyn_obs_state.size(0) / 2) :, 2] = 0.0
+
             # 计算水平距离 [num_envs, num_obstacles]
             dyn_obs_distance_2d = torch.norm(dyn_obs_rpos_expanded[..., :2], dim=2)
-            
+
             # 选择最近的N个障碍物
             _, closest_dyn_obs_idx = torch.topk(
-                dyn_obs_distance_2d, 
-                self.cfg.algo.feature_extractor.dyn_obs_num, 
-                dim=1, 
-                largest=False
+                dyn_obs_distance_2d,
+                self.cfg.algo.feature_extractor.dyn_obs_num,
+                dim=1,
+                largest=False,
             )
-            
+
             # 标记超出范围的障碍物
-            dyn_obs_range_mask = dyn_obs_distance_2d.gather(1, closest_dyn_obs_idx) > self.lidar_range
+            dyn_obs_range_mask = (
+                dyn_obs_distance_2d.gather(1, closest_dyn_obs_idx) > self.lidar_range
+            )
 
             # 获取最近障碍物的相对位置
             closest_dyn_obs_rpos = torch.gather(
-                dyn_obs_rpos_expanded, 
-                1, 
-                closest_dyn_obs_idx.unsqueeze(-1).expand(-1, -1, 3)
+                dyn_obs_rpos_expanded,
+                1,
+                closest_dyn_obs_idx.unsqueeze(-1).expand(-1, -1, 3),
             )
-            
+
             # 转换到目标坐标系
-            closest_dyn_obs_rpos_g = vec_to_new_frame(closest_dyn_obs_rpos, target_dir_2d)
+            closest_dyn_obs_rpos_g = vec_to_new_frame(
+                closest_dyn_obs_rpos, target_dir_2d
+            )
             closest_dyn_obs_rpos_g[dyn_obs_range_mask] = 0.0  # 超出范围的置零
-            
+
             # 计算距离
             closest_dyn_obs_distance = closest_dyn_obs_rpos.norm(dim=-1, keepdim=True)
-            closest_dyn_obs_distance_2d = closest_dyn_obs_rpos_g[..., :2].norm(dim=-1, keepdim=True)
+            closest_dyn_obs_distance_2d = closest_dyn_obs_rpos_g[..., :2].norm(
+                dim=-1, keepdim=True
+            )
             closest_dyn_obs_distance_z = closest_dyn_obs_rpos_g[..., 2].unsqueeze(-1)
-            closest_dyn_obs_rpos_gn = closest_dyn_obs_rpos_g / closest_dyn_obs_distance.clamp(1e-6)
+            closest_dyn_obs_rpos_gn = (
+                closest_dyn_obs_rpos_g / closest_dyn_obs_distance.clamp(1e-6)
+            )
 
             # b. 障碍物速度（目标坐标系）
             closest_dyn_obs_vel = self.dyn_obs_vel[closest_dyn_obs_idx]
@@ -1225,52 +1409,75 @@ class NavigationEnv(IsaacEnv):
             closest_dyn_obs_width = closest_dyn_obs_size[..., 0].unsqueeze(-1)
 
             # 宽度类别：[0, 1, 2, 3]
-            closest_dyn_obs_width_category = closest_dyn_obs_width / self.dyn_obs_width_res - 1.0
+            closest_dyn_obs_width_category = (
+                closest_dyn_obs_width / self.dyn_obs_width_res - 1.0
+            )
             closest_dyn_obs_width_category[dyn_obs_range_mask] = 0.0
 
             closest_dyn_obs_height = closest_dyn_obs_size[..., 2].unsqueeze(-1)
-            
+
             # 高度类别：0表示2D障碍物，其他表示3D
             closest_dyn_obs_height_category = torch.where(
-                closest_dyn_obs_height > self.max_obs_3d_height, 
-                torch.tensor(0.0), 
-                closest_dyn_obs_height
+                closest_dyn_obs_height > self.max_obs_3d_height,
+                torch.tensor(0.0),
+                closest_dyn_obs_height,
             )
             closest_dyn_obs_height_category[dyn_obs_range_mask] = 0.0
 
             # 组合动态障碍物状态 [num_envs, 1, N, 10]
-            dyn_obs_states = torch.cat([
-                closest_dyn_obs_rpos_gn,          # 归一化相对位置 (3)
-                closest_dyn_obs_distance_2d,      # 水平距离 (1)
-                closest_dyn_obs_distance_z,       # 垂直距离 (1)
-                closest_dyn_obs_vel_g,            # 速度 (3)
-                closest_dyn_obs_width_category,   # 宽度类别 (1)
-                closest_dyn_obs_height_category   # 高度类别 (1)
-            ], dim=-1).unsqueeze(1)
+            dyn_obs_states = torch.cat(
+                [
+                    closest_dyn_obs_rpos_gn,  # 归一化相对位置 (3)
+                    closest_dyn_obs_distance_2d,  # 水平距离 (1)
+                    closest_dyn_obs_distance_z,  # 垂直距离 (1)
+                    closest_dyn_obs_vel_g,  # 速度 (3)
+                    closest_dyn_obs_width_category,  # 宽度类别 (1)
+                    closest_dyn_obs_height_category,  # 高度类别 (1)
+                ],
+                dim=-1,
+            ).unsqueeze(1)
+            dyn_obs_states = torch.nan_to_num(
+                dyn_obs_states, nan=0.0, posinf=0.0, neginf=0.0
+            )
 
             # d. 碰撞检测
-            closest_dyn_obs_distance_2d_collsion = closest_dyn_obs_rpos[..., :2].norm(dim=-1, keepdim=True)
-            closest_dyn_obs_distance_2d_collsion[dyn_obs_range_mask] = float('inf')
-            closest_dyn_obs_distance_zn_collision = closest_dyn_obs_rpos[..., 2].unsqueeze(-1).norm(dim=-1, keepdim=True)
-            closest_dyn_obs_distance_zn_collision[dyn_obs_range_mask] = float('inf')
-            
+            closest_dyn_obs_distance_2d_collsion = closest_dyn_obs_rpos[..., :2].norm(
+                dim=-1, keepdim=True
+            )
+            closest_dyn_obs_distance_2d_collsion[dyn_obs_range_mask] = float("inf")
+            closest_dyn_obs_distance_zn_collision = (
+                closest_dyn_obs_rpos[..., 2].unsqueeze(-1).norm(dim=-1, keepdim=True)
+            )
+            closest_dyn_obs_distance_zn_collision[dyn_obs_range_mask] = float("inf")
+
             # 2D和Z方向同时满足才认为碰撞
-            dynamic_collision_2d = closest_dyn_obs_distance_2d_collsion <= (closest_dyn_obs_width/2.0 + 0.3)
-            dynamic_collision_z = closest_dyn_obs_distance_zn_collision <= (closest_dyn_obs_height/2.0 + 0.3)
+            dynamic_collision_2d = closest_dyn_obs_distance_2d_collsion <= (
+                closest_dyn_obs_width / 2.0 + 0.3
+            )
+            dynamic_collision_z = closest_dyn_obs_distance_zn_collision <= (
+                closest_dyn_obs_height / 2.0 + 0.3
+            )
             dynamic_collision_each = dynamic_collision_2d & dynamic_collision_z
-            dynamic_collision = torch.any(dynamic_collision_each, dim=1)
+            dynamic_collision = torch.any(
+                dynamic_collision_each, dim=1
+            )  # 形状: (num_envs,)
 
             # 用于奖励计算的动态障碍物距离
             closest_dyn_obs_distance_reward = (
-                closest_dyn_obs_rpos.norm(dim=-1) - closest_dyn_obs_size[..., 0]/2.0
+                closest_dyn_obs_rpos.norm(dim=-1) - closest_dyn_obs_size[..., 0] / 2.0
             )
-            closest_dyn_obs_distance_reward[dyn_obs_range_mask] = self.cfg.sensor.lidar_range
-            
+            closest_dyn_obs_distance_reward[dyn_obs_range_mask] = (
+                self.cfg.sensor.lidar_range
+            )
+
         else:
             # 如果没有动态障碍物，创建零张量
             dyn_obs_states = torch.zeros(
-                self.num_envs, 1, self.cfg.algo.feature_extractor.dyn_obs_num, 10, 
-                device=self.cfg.device
+                self.num_envs,
+                1,
+                self.cfg.algo.feature_extractor.dyn_obs_num,
+                10,
+                device=self.cfg.device,
             )
             dynamic_collision = torch.zeros(
                 self.num_envs, 1, dtype=torch.bool, device=self.cfg.device
@@ -1282,71 +1489,207 @@ class NavigationEnv(IsaacEnv):
         obs = {
             "state": robot_state,
             "lidar": self.lidar_scan,
-            "direction": target_dir_2d,
-            "dynamic_obstacle": dyn_obs_states
+            "direction": torch.nan_to_num(
+                target_dir_2d, nan=0.0, posinf=0.0, neginf=0.0
+            ),
+            "dynamic_obstacle": dyn_obs_states,
         }
 
         # =========================================================================
-        # 步骤6：计算奖励
+        # 步骤6：碰撞检测和到达目标检测
         # =========================================================================
-        # a. 静态障碍物安全奖励：只在距离2m内时惩罚，避免过度绕行
-        min_lidar_dist = (self.lidar_range - self.lidar_scan).min(dim=-1)[0].min(dim=-1)[0]
-        safety_threshold = 2.0
-        reward_safety_static = torch.where(
-            min_lidar_dist < safety_threshold,
-            -5.0 * (safety_threshold - min_lidar_dist) / safety_threshold,
-            torch.zeros_like(min_lidar_dist)
+        # a. 静态障碍物碰撞检测
+        # LiDAR读数接近最大值表示有障碍物非常近
+        static_collision = einops.reduce(self.lidar_scan, "n 1 w h -> n 1", "max") > (
+            self.lidar_range - 0.3
+        )  # 0.3米碰撞半径
+
+        # b. 组合碰撞检测结果
+        # dynamic_collision 已在动态障碍物处理部分定义
+        # 确保 dynamic_collision 的形状正确
+        if dynamic_collision.dim() == 1:
+            dynamic_collision = dynamic_collision.unsqueeze(
+                -1
+            )  # (num_envs,) -> (num_envs, 1)
+
+        collision = static_collision | dynamic_collision
+
+        # c. 到达目标检测
+        # 只考虑水平距离（与高度无关）
+        reach_goal = (distance_2d.squeeze(-1) < 0.5).squeeze(-1)  # 形状: (num_envs,)
+
+        # =========================================================================
+        # 步骤7：计算奖励（重新设计）
+        # =========================================================================
+        # 奖励设计原则：
+        # 1. 明确的目标导向：到达目标给予大奖励
+        # 2. 合理的避障激励：距离障碍物越近惩罚越大
+        # 3. 平滑的运动鼓励：避免剧烈的动作变化
+        # 4. 移除生存奖励：避免机器人"苟活"
+
+        # a. 进度奖励：距离减小的奖励
+        # 初始化上一时刻距离
+        if not hasattr(self, "prev_distance"):
+            self.prev_distance = distance_2d.clone()
+
+        # 计算距离改善（优化：只计算水平距离改善）
+        distance_improved = (self.prev_distance - distance_2d).squeeze(-1)
+        self.prev_distance = distance_2d.clone()
+
+        # 进度奖励：距离减小给予奖励，距离增加给予惩罚
+        reward_progress = distance_improved * 10.0  # 增加权重
+
+        # b. 速度奖励：使用机器人坐标系（关键改进）
+        # 计算机器人前进方向（机器人坐标系 x 轴在世界坐标系中的表示）
+        # 注意：forward_dir_world 的形状需要与 self.go2.vel_w 的形状匹配
+        # self.go2.vel_w 的形状是 (num_envs, 1, 6)，所以 forward_dir_world 应该是 (num_envs, 1, 3)
+
+        # robot_yaw 的形状是 (num_envs, 1)，需要先 squeeze 再处理
+        robot_yaw_squeezed = robot_yaw.squeeze(-1)  # 形状: (num_envs,)
+
+        forward_dir_world = torch.stack(
+            [
+                torch.cos(robot_yaw_squeezed),
+                torch.sin(robot_yaw_squeezed),
+                torch.zeros_like(robot_yaw_squeezed),
+            ],
+            dim=-1,
+        ).unsqueeze(
+            -2
+        )  # 形状: (num_envs, 1, 3)
+
+        # 速度在前进方向上的投影
+        # self.go2.vel_w[..., :3] 的形状是 (num_envs, 1, 3)
+        # forward_dir_world 的形状是 (num_envs, 1, 3)
+        forward_vel = (
+            (self.go2.vel_w[..., :3] * forward_dir_world).sum(-1).squeeze(-1)
+        )  # 形状: (num_envs,)
+
+        # 目标在机器人前方方向的投影（余弦相似度）
+        target_in_front = torch.cos(target_angle_relative).squeeze(
+            -1
+        )  # 形状: (num_envs,)
+
+        # 速度奖励：前进速度 × 目标在前方的程度
+        # 只有当目标在前方且向前移动时才给予奖励
+        reward_vel = forward_vel * target_in_front.clamp(0, 1) * 2.0
+
+        # c. 静态障碍物安全奖励：指数衰减（关键改进）
+        min_lidar_dist = (
+            (self.lidar_range - self.lidar_scan).min(dim=-1)[0].min(dim=-1)[0]
         )
 
-        # b. 动态障碍物安全奖励
-        if self.cfg.env_dyn.num_obstacles != 0:
-            reward_safety_dynamic = torch.log(
-                closest_dyn_obs_distance_reward.clamp(min=1e-6, max=self.lidar_range)
-            ).mean(dim=-1).unsqueeze(-1)
+        # 使用指数衰减，距离越近惩罚越大
+        # 距离 4m → 惩罚 -0.0003
+        # 距离 2m → 惩罚 -0.018
+        # 距离 1m → 惩罚 -0.135
+        # 距离 0.5m → 惩罚 -0.541
+        reward_safety_static = -torch.exp(-min_lidar_dist / 0.5) * 2.0
 
-        # c. 速度奖励：朝向目标方向的速度分量
-        vel_direction = rpos / distance.clamp_min(1e-6)
-        reward_vel = (self.go2.vel_w[..., :3] * vel_direction).sum(-1)
-        
-        # d. 进度奖励：鼓励减小与目标的距离
-        reward_progress = -distance.squeeze(-1) * 0.1
-        
-        # e. 平滑性惩罚：速度变化的大小
-        penalty_smooth = (self.go2.vel_w[..., :3] - self.prev_robot_vel_w).norm(dim=-1)
-        
-        # f. 碰撞检测：LiDAR读数接近最大值表示有障碍物非常近
-        static_collision = einops.reduce(
-            self.lidar_scan, "n 1 w h -> n 1", "max"
-        ) > (self.lidar_range - 0.3)  # 0.3米碰撞半径
-        collision = static_collision | dynamic_collision
-        
-        # 最终奖励组合
+        # d. 动态障碍物安全奖励：改进的对数奖励（关键改进）
         if self.cfg.env_dyn.num_obstacles != 0:
+            # 使用平方根而非对数，避免梯度问题
+            # 距离越近，惩罚越大
+            dist_to_obstacle = closest_dyn_obs_distance_reward.clamp(
+                0.1, self.lidar_range
+            )
+            reward_safety_dynamic = (
+                -torch.sqrt(self.lidar_range - dist_to_obstacle) * 3.0
+            )
+            reward_safety_dynamic = reward_safety_dynamic.mean(dim=-1).unsqueeze(-1)
+
+        # e. 平滑性惩罚：yaw角速度惩罚（避免剧烈旋转）
+        angular_vel_penalty = torch.abs(angular_vel_yaw) * 0.5  # 只惩罚yaw角速度
+
+        # f. 碰撞惩罚：大幅增加（关键改进）
+        # 确保形状一致：(num_envs, 1)
+        collision_penalty = collision.float() * (-200.0)  # 形状: (num_envs, 1)
+
+        # g. 到达目标奖励：大幅增加（关键改进）
+        # 确保形状一致：(num_envs, 1)
+        goal_reward = reach_goal.unsqueeze(-1).float() * 200.0  # 形状: (num_envs, 1)
+
+        # h. 朝向奖励：鼓励朝向目标（新增）
+        # 目标相对角度越小（越朝向目标），奖励越大
+        # 确保形状一致：(num_envs, 1)
+        reward_heading = (
+            torch.cos(target_angle_relative).squeeze(-1).unsqueeze(-1) * 0.5
+        )  # 形状: (num_envs, 1)
+
+        # 最终奖励组合（移除生存奖励）
+        # 所有奖励分量形状统一为 (num_envs, 1)
+        if self.cfg.env_dyn.num_obstacles != 0:
+            reward_progress_2d = (
+                reward_progress
+                if reward_progress.dim() == 2
+                else reward_progress.unsqueeze(-1)
+            )
+            reward_vel_2d = (
+                reward_vel.unsqueeze(-1) if reward_vel.dim() == 1 else reward_vel
+            )
+            reward_safety_static_2d = (
+                reward_safety_static
+                if reward_safety_static.dim() == 2
+                else reward_safety_static.unsqueeze(-1)
+            )
+            angular_vel_penalty_2d = (
+                angular_vel_penalty
+                if angular_vel_penalty.dim() == 2
+                else angular_vel_penalty.unsqueeze(-1)
+            )
+
             self.reward = (
-                reward_vel * 1.1 +               # 朝向目标的速度（增加权重）
-                1.0 +                            # 生存奖励
-                reward_progress +                # 进度奖励
-                reward_safety_static * 1.0 +     # 静态障碍物安全
-                reward_safety_dynamic * 1.0 -    # 动态障碍物安全
-                penalty_smooth * 0.09            # 平滑性惩罚
+                reward_progress_2d * 1.0  # 进度奖励（距离改善）
+                + reward_vel_2d * 1.0  # 速度奖励
+                + reward_safety_static_2d * 1.0  # 静态障碍物安全
+                + reward_safety_dynamic * 1.0  # 动态障碍物安全
+                + -angular_vel_penalty_2d  # 角速度惩罚
+                + collision_penalty  # 碰撞惩罚
+                + goal_reward  # 到达目标奖励
+                + reward_heading  # 朝向奖励
             )
         else:
+            reward_progress_2d = (
+                reward_progress
+                if reward_progress.dim() == 2
+                else reward_progress.unsqueeze(-1)
+            )
+            reward_vel_2d = (
+                reward_vel.unsqueeze(-1) if reward_vel.dim() == 1 else reward_vel
+            )
+            reward_safety_static_2d = (
+                reward_safety_static
+                if reward_safety_static.dim() == 2
+                else reward_safety_static.unsqueeze(-1)
+            )
+            angular_vel_penalty_2d = (
+                angular_vel_penalty
+                if angular_vel_penalty.dim() == 2
+                else angular_vel_penalty.unsqueeze(-1)
+            )
+            reward_safety_dynamic = torch.zeros_like(reward_safety_static_2d)
+
             self.reward = (
-                reward_vel * 1.1 + 
-                1.0 + 
-                reward_progress + 
-                reward_safety_static * 1.0 - 
-                penalty_smooth * 0.09
+                reward_progress_2d * 1.0
+                + reward_vel_2d * 1.0
+                + reward_safety_static_2d * 1.0
+                + -angular_vel_penalty_2d
+                + collision_penalty
+                + goal_reward
+                + reward_heading
             )
 
-        # =========================================================================
-        # 步骤7：判断终止条件
-        # =========================================================================
-        # 到达目标（距离 < 0.4m）
-        reach_goal = (distance.squeeze(-1) < 0.4)
+        # 确保奖励的形状是 (num_envs, 1)
+        assert self.reward.shape == (
+            self.num_envs,
+            1,
+        ), f"Reward shape mismatch: {self.reward.shape} vs {(self.num_envs, 1)}"
 
-        # 终止条件：只检测碰撞
-        self.terminated = collision
+        # =========================================================================
+        # 步骤8：判断终止条件
+        # =========================================================================
+        # 终止条件：碰撞或到达目标
+        self.terminated = collision | reach_goal.unsqueeze(-1)
 
         # 截断条件：达到最大回合长度
         self.truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
@@ -1355,33 +1698,42 @@ class NavigationEnv(IsaacEnv):
         self.prev_robot_vel_w = self.go2.vel_w[..., :3].clone()
 
         # =========================================================================
-        # 步骤8：更新统计信息
+        # 步骤9：更新统计信息
         # =========================================================================
-        self.stats["return"] += self.reward                    # 累积回报
+        self.stats["return"] += self.reward  # 累积回报
         self.stats["episode_len"][:] = self.progress_buf.unsqueeze(1)  # 回合长度
-        self.stats["reach_goal"] = reach_goal.float()          # 是否到达目标
-        self.stats["collision"] = collision.float()            # 是否碰撞
-        self.stats["truncated"] = self.truncated.float()       # 是否截断
+        self.stats["reach_goal"] = reach_goal.float()  # 是否到达目标
+        self.stats["collision"] = collision.float()  # 是否碰撞
+        self.stats["truncated"] = self.truncated.float()  # 是否截断
+        self.stats["reward_progress"] = reward_progress_2d
+        self.stats["reward_velocity"] = reward_vel_2d
+        self.stats["reward_safety_static"] = reward_safety_static_2d
+        self.stats["reward_safety_dynamic"] = reward_safety_dynamic
+        self.stats["reward_angular_penalty"] = angular_vel_penalty_2d
+        self.stats["reward_heading"] = reward_heading
 
         # 返回观测张量字典
-        return TensorDict({
-            "agents": TensorDict(
-                {
-                    "observation": obs,
-                }, 
-                [self.num_envs]
-            ),
-            "stats": self.stats.clone(),
-            "info": self.info
-        }, self.batch_size)
+        return TensorDict(
+            {
+                "agents": TensorDict(
+                    {
+                        "observation": obs,
+                    },
+                    [self.num_envs],
+                ),
+                "stats": self.stats.clone(),
+                "info": self.info,
+            },
+            self.batch_size,
+        )
 
     def _compute_reward_and_done(self):
         """
         计算奖励和终止条件
-        
+
         将在 `_compute_state_and_obs` 中计算好的奖励和终止条件打包返回。
         这种设计允许在计算观测时同时计算奖励，避免重复计算。
-        
+
         返回：
         ----------
         TensorDict
@@ -1394,12 +1746,10 @@ class NavigationEnv(IsaacEnv):
         # 返回奖励和终止条件
         return TensorDict(
             {
-                "agents": {
-                    "reward": self.reward
-                },
+                "agents": {"reward": self.reward},
                 "done": self.terminated | self.truncated,  # 任一条件满足即结束
-                "terminated": self.terminated,              # 终止（碰撞）
-                "truncated": self.truncated,                # 截断（超时）
+                "terminated": self.terminated,  # 终止（碰撞）
+                "truncated": self.truncated,  # 截断（超时）
             },
             self.batch_size,
         )
