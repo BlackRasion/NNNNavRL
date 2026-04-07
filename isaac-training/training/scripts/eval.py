@@ -79,10 +79,10 @@ def main(cfg):
     # =========================================================================
     policy = PPO(cfg.algo, transformed_env.observation_spec, transformed_env.action_spec, cfg.device)
 
-    # 注意：使用新的 Go2VelocityController 后，维度不兼容，需要重新训练
-    # checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260329_170703-38sxzjis/files/checkpoint_29000.pt"
+    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260407_183000-gjm4m08p/files/checkpoint_final.pt"
+    policy.load_state_dict(torch.load(checkpoint))
     # python training/scripts/eval.py headless=True env.num_envs=1024 max_frame_num=1e6
-    # policy.load_state_dict(torch.load(checkpoint))
+
     
     # =========================================================================
     # 步骤 6: 初始化统计收集器

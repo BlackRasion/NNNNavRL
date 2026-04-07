@@ -57,7 +57,7 @@ class Go2Robot(RobotBase):
 
         self.inertia = (0.02448, 0.098077, 0.107)  # 惯性张量（单位：kg·m²）
 
-        self.max_linear_vel = 2.5  # 最大线速度（单位：m/s）
+        self.max_linear_vel = 2.25  # 最大线速度（单位：m/s）
 
         self.max_angular_vel = 1.57  # 最大角速度（单位：rad/s）
         self.max_linear_acc = 6.0

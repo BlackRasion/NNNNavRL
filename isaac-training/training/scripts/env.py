@@ -252,7 +252,7 @@ class NavigationEnv(IsaacEnv):
         self._create_boundary_walls()
 
         # 更新有效导航区域（围墙内部）
-        self.nav_area_range = self.map_range[0] + 1.5  # 21.5m
+        self.nav_area_range = self.map_range[0] + 2.5  # 22.5m
 
         # =========================================================================
         # 6. 创建动态障碍物（如果启用）
@@ -922,16 +922,16 @@ class NavigationEnv(IsaacEnv):
 
         根据训练或评估模式设置目标位置：
         - 训练模式：随机生成目标位置（四个方向之一）
-        - 评估模式：固定目标位置（用于对比算法性能）
+        - 评估模式：固定目标位置
 
         参数：
         ----------
         env_ids : torch.Tensor
-            需要重置的环境 ID 张量
+            需要重置的机器人 ID
 
         目标位置设计：
         --------------
-        训练模式下，目标点限制在围墙内部（±18米范围内）：
+        训练模式下，目标点限制在围墙内部
         - 四个方向：前方(0, 16)、后方(0, -16)、右方(16, 0)、左方(-16, 0)
         - 每个方向有一定随机偏移
         - 高度在 [0.5, 2.5] 米范围内随机
@@ -941,25 +941,21 @@ class NavigationEnv(IsaacEnv):
             # 目标点和起始点限制在围墙内部（±18米范围内）
 
             # 掩码：控制 x/y/z 哪个方向有偏移
-            # [1, 0, 1]: x方向随机, y固定, z固定
-            # [0, 1, 1]: x固定, y方向随机, z固定
+            # [1, 0, 1]: x随机, y固定, z固定
+            # [0, 1, 1]: x固定, y随机, z固定
             masks = torch.tensor(
                 [[1.0, 0.0, 1.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
                 dtype=torch.float,
                 device=self.cfg.device,
             )
 
-            # 基础偏移位置（调整到围墙内部）
-            # [0, 16, 0]: 前方16米
-            # [0, -16, 0]: 后方16米
-            # [16, 0, 0]: 右方16米
-            # [-16, 0, 0]: 左方16米
+            # 基础偏移位置
             shifts = torch.tensor(
                 [
-                    [0.0, 16.0, 0.0],
-                    [0.0, -16.0, 0.0],
-                    [16.0, 0.0, 0.0],
-                    [-16.0, 0.0, 0.0],
+                    [0.0, 22.5, 0.0],
+                    [0.0, -22.5, 0.0],
+                    [22.5, 0.0, 0.0],
+                    [-22.5, 0.0, 0.0],
                 ],
                 dtype=torch.float,
                 device=self.cfg.device,
@@ -970,14 +966,13 @@ class NavigationEnv(IsaacEnv):
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
 
-            # 在围墙内部随机生成位置（范围：±18米）
-            target_pos = 36.0 * torch.rand(
+            # 在围墙内部随机生成位置（范围：±22.5米）
+            target_pos = 45.0 * torch.rand(
                 env_ids.size(0), 1, 3, dtype=torch.float, device=self.cfg.device
-            ) + (-18.0)
+            ) + (-22.5)
 
-            # 高度固定为机器人质心高度（0.5米）
-            # 这样到达目标的判断只与水平距离有关，与高度无关
-            target_pos[:, 0, 2] = 0.5
+            # 高度固定为机器人质心高度（0.4米）
+            target_pos[:, 0, 2] = 0.4
 
             # 应用掩码和偏移
             target_pos = target_pos * selected_masks + selected_shifts
@@ -991,7 +986,7 @@ class NavigationEnv(IsaacEnv):
             # y坐标：固定在-22.5米
             self.target_pos[:, 0, 1] = -22.5
             # z坐标：固定在机器人质心高度
-            self.target_pos[:, 0, 2] = 0.5
+            self.target_pos[:, 0, 2] = 0.4
 
     def _reset_idx(self, env_ids: torch.Tensor):
         """
@@ -1022,32 +1017,80 @@ class NavigationEnv(IsaacEnv):
             )
             shifts = torch.tensor(
                 [
-                    [0.0, 16.0, 0.0],
-                    [0.0, -16.0, 0.0],
-                    [16.0, 0.0, 0.0],
-                    [-16.0, 0.0, 0.0],
+                    [0.0, 22.5, 0.0],
+                    [0.0, -22.5, 0.0],
+                    [22.5, 0.0, 0.0],
+                    [-22.5, 0.0, 0.0],
                 ],
                 dtype=torch.float,
                 device=self.cfg.device,
             )
 
-            mask_indices = np.random.randint(0, masks.size(0), size=env_ids.size(0))
+            # 确保起始位置和目标位置不在同一方向
+            # 选择与目标位置相反的方向
+            target_directions = self.target_pos[env_ids, 0, :2]
+            target_angles = torch.atan2(target_directions[..., 1], target_directions[..., 0])
+            
+            # 将角度映射到四个方向（前方=0, 后方=1, 右方=2, 左方=3）
+            target_direction_idx = torch.zeros(env_ids.size(0), dtype=torch.long, device=self.cfg.device)
+            target_direction_idx[torch.abs(target_angles) < torch.pi/4] = 0  # 前方
+            target_direction_idx[torch.abs(target_angles - torch.pi) < torch.pi/4] = 1  # 后方
+            target_direction_idx[torch.abs(target_angles - torch.pi/2) < torch.pi/4] = 2  # 右方
+            target_direction_idx[torch.abs(target_angles + torch.pi/2) < torch.pi/4] = 3  # 左方
+            
+            # 选择相反方向
+            opposite_directions = (target_direction_idx + 2) % 4
+            
+            # 随机选择是否使用相反方向（50%概率）
+            use_opposite = torch.rand(env_ids.size(0), device=self.cfg.device) > 0.5
+            mask_indices = torch.where(use_opposite, opposite_directions, 
+                                       torch.randint(0, 4, (env_ids.size(0),), device=self.cfg.device))
+            
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
 
-            # 随机生成起始位置（范围：±18米）
-            pos = 36.0 * torch.rand(
+            # 随机生成起始位置（范围：±22.5米）
+            pos = 45.0 * torch.rand(
                 env_ids.size(0), 1, 3, dtype=torch.float, device=self.cfg.device
-            ) + (-18.0)
+            ) + (-22.5)
 
-            # 高度在 [0.4, 0.6] 米范围内随机（地面机器人）
-            heights = 0.4 + torch.rand(
-                env_ids.size(0), dtype=torch.float, device=self.cfg.device
-            ) * (0.6 - 0.4)
-            pos[:, 0, 2] = heights
+            # 高度0.4米（地面机器人）
+            pos[:, 0, 2] = 0.4
 
             # 应用掩码和偏移
             pos = pos * selected_masks + selected_shifts
+            
+            # 确保起始位置和目标位置有最小距离（至少5米）
+            min_distance = 5.0
+            distance_to_target = (pos[:, 0, :2] - self.target_pos[env_ids, 0, :2]).norm(dim=-1)
+            
+            # 如果距离太近，重新生成位置
+            retry_count = 0
+            max_retries = 10
+            while (distance_to_target < min_distance).any() and retry_count < max_retries:
+                too_close_mask = distance_to_target < min_distance
+                num_too_close = too_close_mask.sum().item()
+                
+                if num_too_close > 0:
+                    # 重新生成位置
+                    new_pos = 45.0 * torch.rand(
+                        num_too_close, 1, 3, dtype=torch.float, device=self.cfg.device
+                    ) + (-22.5)
+                    new_pos[:, 0, 2] = 0.4
+                    
+                    # 随机选择新方向
+                    new_mask_indices = torch.randint(0, 4, (num_too_close,), device=self.cfg.device)
+                    new_masks = masks[new_mask_indices].unsqueeze(1)
+                    new_shifts = shifts[new_mask_indices].unsqueeze(1)
+                    new_pos = new_pos * new_masks + new_shifts
+                    
+                    # 更新位置
+                    pos[too_close_mask] = new_pos
+                    
+                    # 重新计算距离
+                    distance_to_target = (pos[:, 0, :2] - self.target_pos[env_ids, 0, :2]).norm(dim=-1)
+                
+                retry_count += 1
         else:
             # 评估模式：固定起始位置
             pos = torch.zeros(len(env_ids), 1, 3, device=self.cfg.device)
@@ -1062,7 +1105,7 @@ class NavigationEnv(IsaacEnv):
         self.target_dir[env_ids] = self.target_pos[env_ids] - pos
 
         # 设置机器人朝向：面向目标
-        rpy = torch.zeros(len(env_ids), 1, 3, device=self.device)
+        rpy = torch.zeros(len(env_ids), 1, 3, device=self.cfg.device)
         diff = self.target_pos[env_ids] - pos
 
         # 计算偏航角（水平面内朝向目标）
