@@ -578,7 +578,7 @@ class NavigationEnv(IsaacEnv):
             closest_dyn_obs_rpos_g = vec_to_new_frame(closest_dyn_obs_rpos, target_dir_2d) 
             closest_dyn_obs_rpos_g[dyn_obs_range_mask] = 0. # 超出范围的置零
             # 计算距离
-            closest_dyn_obs_distance = closest_dyn_obs_rpos.norm(dim=-1, keepdim=True)
+            closest_dyn_obs_distance = closest_dyn_obs_rpos_g.norm(dim=-1, keepdim=True)
             closest_dyn_obs_distance_2d = closest_dyn_obs_rpos_g[..., :2].norm(dim=-1, keepdim=True)
             closest_dyn_obs_distance_z = closest_dyn_obs_rpos_g[..., 2].unsqueeze(-1)
             closest_dyn_obs_rpos_gn = closest_dyn_obs_rpos_g / closest_dyn_obs_distance.clamp(1e-6)
