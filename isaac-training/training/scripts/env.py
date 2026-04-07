@@ -323,29 +323,28 @@ class NavigationEnv(IsaacEnv):
         创建动态障碍物
 
         动态障碍物分类：
-        - 3D 障碍物：立方体，可在空中漂浮
-        - 2D 障碍物：圆柱体，只能水平移动
+        - 3D立方体，可在空中漂浮
+        - 2D圆柱体，只能水平移动
 
         尺寸分类：
-        - 宽度分为 N_w=4 个区间: [0, 0.25], [0.25, 0.50], [0.50, 0.75], [0.75, 1.0]
-        - 高度分为 N_h=2 个区间: [0, 0.5], [0.5, 1.0]（区分3D和2D障碍物）
+        - 宽度分为 N_w=4 个区间
+        - 高度分为 N_h=2 个区间：cuboid, cylinder
         """
         # 障碍物分类参数
         N_w = 4  # 宽度区间数
-        N_h = 2  # 高度区间数
+        N_h = 2  # 高度分类数：cuboid, cylinder
         max_obs_width = 1.0  # 最大宽度（米）
 
-        # 3D和2D障碍物的高度限制
-        self.max_obs_3d_height = 1.0  # 3D障碍物最大高度
-        self.max_obs_2d_height = 5.0  # 2D障碍物最大高度
+        self.max_obs_3d_height = 0.75  # 3D立方体高度
+        self.max_obs_2d_height = 5.0  # 2D圆柱体高度
 
         # 宽度分辨率：每个宽度区间的宽度
         self.dyn_obs_width_res = max_obs_width / float(N_w)
 
-        # 障碍物类别总数
+        # 障碍物类别总数    
         dyn_obs_category_num = N_w * N_h
 
-        # 每个类别的障碍物数量
+        # 每个类别的障碍物数量 
         self.dyn_obs_num_of_each_category = int(
             self.cfg.env_dyn.num_obstacles / dyn_obs_category_num
         )
@@ -358,14 +357,14 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 初始化动态障碍物状态变量
         # =========================================================================
-        # 障碍物状态：[位置(3), 四元数(4), 速度(3), 角速度(3)] = 13维
+        # 障碍物状态（N，13）
         self.dyn_obs_state = torch.zeros(
             (self.cfg.env_dyn.num_obstacles, 13),
             dtype=torch.float,
             device=self.cfg.device,
         )
-        # 四元数 w 分量初始化为1（无旋转）
-        self.dyn_obs_state[:, 3] = 1.0
+
+        self.dyn_obs_state[:, 3] = 1.0 # 四元数 w 分量初始化为1 （无旋转）
 
         # 障碍物目标位置：用于随机运动
         self.dyn_obs_goal = torch.zeros(
@@ -391,7 +390,7 @@ class NavigationEnv(IsaacEnv):
         # 步数计数器
         self.dyn_obs_step_count = 0
 
-        # 障碍物尺寸：[宽度, 深度, 高度]
+        # 障碍物尺寸（N，3[width, width, height]）
         self.dyn_obs_size = torch.zeros(
             (self.cfg.env_dyn.num_obstacles, 3), dtype=torch.float, device=self.cfg.device
         )
@@ -425,7 +424,7 @@ class NavigationEnv(IsaacEnv):
                 self.dyn_obs_origin[idx] = torch.tensor(
                     origin, dtype=torch.float, device=self.cfg.device
                 )
-                self.dyn_obs_state[idx, :3] = torch.tensor(
+                self.dyn_obs_state[idx, :3] = torch.tensor( 
                     origin, dtype=torch.float, device=self.cfg.device
                 )
 
@@ -445,19 +444,14 @@ class NavigationEnv(IsaacEnv):
 
         参数：
         ----------
-        category_idx : int
-            障碍物类别索引
-        cuboid_category_num : int
-            立方体障碍物类别数量
-        prev_pos_list : List[np.ndarray]
-            已生成的障碍物位置列表
-        obs_dist : float
-            期望的障碍物间距
+        category_idx : int 障碍物类别索引
+        cuboid_category_num : int 立方体障碍物类别数量
+        prev_pos_list : List[np.ndarray] 已生成的障碍物位置列表
+        obs_dist : float 期望的障碍物间距
 
         返回：
         ----------
-        Tuple[float, float, float]
-            障碍物位置 (x, y, z)
+        Tuple[float, float, float] 障碍物位置 (x, y, z)
         """
         start_time = time.time()
         curr_obs_dist = obs_dist  # 当前障碍物间距阈值
@@ -469,10 +463,10 @@ class NavigationEnv(IsaacEnv):
 
             # 根据类别确定 z 坐标
             if category_idx < cuboid_category_num:
-                # 3D 障碍物：z 坐标随机[1.5, map_range[2]]
+                # 3D 立方体：z 坐标随机[1.5, map_range[2]]
                 oz = np.random.uniform(low=1.5, high=self.map_range[2])
             else:
-                # 2D 障碍物：z 坐标固定在中间高度
+                # 2D 圆柱体：z 坐标固定在中间高度 
                 oz = self.max_obs_2d_height / 2.0
 
             # 检查与已有障碍物的距离
@@ -492,9 +486,7 @@ class NavigationEnv(IsaacEnv):
                 prev_pos_list.append(curr_pos)
                 return ox, oy, oz
 
-    def _check_position_validity(
-        self, prev_pos_list: List[np.ndarray], curr_pos: np.ndarray, min_dist: float
-    ) -> bool:
+    def _check_position_validity(self, prev_pos_list: List[np.ndarray], curr_pos: np.ndarray, min_dist: float) -> bool:
         """
         检查位置是否满足最小距离要求
 
@@ -523,14 +515,10 @@ class NavigationEnv(IsaacEnv):
 
         参数：
         ----------
-        category_idx : int
-            障碍物类别索引
-        cuboid_category_num : int
-            立方体障碍物类别数量
-        max_obs_width : float
-            最大宽度
-        N_w : int
-            宽度区间数
+        category_idx : int 障碍物类别索引
+        cuboid_category_num : int 立方体障碍物类别数量
+        max_obs_width : float 最大宽度
+        N_w : int 宽度区间数
         """
         # 障碍物列表
         self.dyn_obs_list = getattr(self, "dyn_obs_list", [])
@@ -543,7 +531,7 @@ class NavigationEnv(IsaacEnv):
             cuboid_cfg = RigidObjectCfg(
                 prim_path=f"/World/Origin{construct_input(category_idx*self.dyn_obs_num_of_each_category, (category_idx+1)*self.dyn_obs_num_of_each_category)}/Cuboid",
                 spawn=sim_utils.CuboidCfg(
-                    size=[obs_width, obs_width, self.max_obs_3d_height],
+                    size=[obs_width, obs_width, obs_height],
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(),
                     mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
                     collision_props=sim_utils.CollisionPropertiesCfg(
@@ -571,7 +559,7 @@ class NavigationEnv(IsaacEnv):
                 prim_path=f"/World/Origin{construct_input(category_idx*self.dyn_obs_num_of_each_category, (category_idx+1)*self.dyn_obs_num_of_each_category)}/Cylinder",
                 spawn=sim_utils.CylinderCfg(
                     radius=radius,
-                    height=self.max_obs_2d_height,
+                    height=obs_height,
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(),
                     mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
                     collision_props=sim_utils.CollisionPropertiesCfg(
@@ -628,7 +616,7 @@ class NavigationEnv(IsaacEnv):
                 torch.sum((self.dyn_obs_state[:, :3] - self.dyn_obs_goal) ** 2, dim=1)
             )
         else:
-            dyn_obs_goal_dist = torch.zeros(  # 初始时刻距离设为0
+            dyn_obs_goal_dist = torch.zeros(  # 初始时刻设为0
                 self.dyn_obs_state.size(0), device=self.cfg.device
             )
 
@@ -672,7 +660,7 @@ class NavigationEnv(IsaacEnv):
             self.dyn_obs_goal[:, 2], min=0.0, max=self.map_range[2]
         )
 
-        # 2D 障碍物（后半部分）z坐标固定在中间高度
+        # 2D 圆柱体（后半部分）z坐标固定
         self.dyn_obs_goal[int(self.dyn_obs_goal.size(0) / 2) :, 2] = (
             self.max_obs_2d_height / 2.0
         )
@@ -1150,7 +1138,7 @@ class NavigationEnv(IsaacEnv):
 
         观测空间详解：
         --------------
-        1. **LiDAR观测**：
+        1. **LiDAR观测：
            - 格式：[num_envs, 1, 36, 3]
            - 值：探测距离（值越大表示障碍物越近）
            - 用途：感知周围障碍物分布
@@ -1160,9 +1148,9 @@ class NavigationEnv(IsaacEnv):
            - 内容：[相对位置归一化(2), 水平距离(1), 水平速度(2), yaw(1), 目标相对角(1), yaw角速度(1)]
            - 坐标系：目标坐标系（旋转不变）
 
-        3. **动态障碍物状态**：
+        3. 动态障碍物状态：
            - 格式：[num_envs, 1, N, 10]
-           - 内容：[相对位置归一化(3), 水平距离(1), 垂直距离(1), 速度(3), 宽度类别(1), 高度类别(1)]
+           - 内容：[相对机器人的单位向量(3), 水平距离(1), z轴差(1), 速度(3), 宽度类别(1), 高度类别(1)]，前四项为目标坐标系下
            - N：最近的N个障碍物
         """
         # =========================================================================
@@ -1195,16 +1183,14 @@ class NavigationEnv(IsaacEnv):
         # 结果：值越大表示障碍物越近（探测范围 - 实际距离）
 
         # =========================================================================
-        # 步骤3：计算机器人内部状态观测（优化：减少状态维度）
+        # 步骤3：计算机器人内部状态观测
         # =========================================================================
-        # 控制形式：，只需要水平面信息
-
-        # a. 距离信息（优化：只计算水平距离）
+        # a. 距离信息
         rpos = self.target_pos - self.root_state[..., :3]  # 相对位置向量
 
-        # 优化：水平距离计算（忽略高度，减少计算量）
-        rpos_2d = rpos[..., :2]  # 只取 x, y 分量
-        distance_2d = rpos_2d.norm(dim=-1, keepdim=True)  # 水平距离
+        # 水平距离计算
+        rpos_2d = rpos[..., :2]
+        distance_2d = rpos_2d.norm(dim=-1, keepdim=True)
 
         # b. 目标方向（用于坐标变换）
         target_dir_2d = self.target_dir.clone()
@@ -1277,55 +1263,52 @@ class NavigationEnv(IsaacEnv):
         # 步骤4：计算动态障碍物观测（如果启用）
         # =========================================================================
         if self.cfg.env_dyn.num_obstacles != 0:
-            # a. 找到最近的 N 个障碍物，扩展障碍物位置维度以便广播计算
+            # 扩展障碍物位置维度以便广播计算
             dyn_obs_pos_expanded = (
                 self.dyn_obs_state[..., :3].unsqueeze(0).repeat(self.num_envs, 1, 1)
             )
 
-            # 计算相对位置
+            # 计算相对位置 （num_envs, N, 3）（世界坐标系）
             dyn_obs_rpos_expanded = (
                 dyn_obs_pos_expanded[..., :3] - self.root_state[..., :3]
             )
-
-            # 2D障碍物高度设为0（只考虑水平距离）
+            # 2D圆柱体相对高度设为0（只考虑水平距离）
             dyn_obs_rpos_expanded[:, int(self.dyn_obs_state.size(0) / 2) :, 2] = 0.0
 
-            # 计算水平距离 [num_envs, num_obstacles]
-            dyn_obs_distance_2d = torch.norm(dyn_obs_rpos_expanded[..., :2], dim=2)
-
-            # 选择最近的N个障碍物
+            # 计算相对距离 [num_envs, N]
+            dyn_obs_distance = torch.norm(dyn_obs_rpos_expanded, dim=2)
+            
+            # 选择最近的N个动态障碍物
             _, closest_dyn_obs_idx = torch.topk(
-                dyn_obs_distance_2d,
+                dyn_obs_distance,
                 self.cfg.algo.feature_extractor.dyn_obs_num,
                 dim=1,
                 largest=False,
             )
 
-            # 标记超出范围的障碍物
+            # 超出范围障碍物的标记 [num_envs, N] (布尔值)
             dyn_obs_range_mask = (
-                dyn_obs_distance_2d.gather(1, closest_dyn_obs_idx) > self.lidar_range
+                dyn_obs_distance.gather(1, closest_dyn_obs_idx) > self.lidar_range
             )
 
-            # 获取最近障碍物的相对位置
+            # 最近N个障碍物的相对位置 [num_envs, N, 3] (世界坐标系)
             closest_dyn_obs_rpos = torch.gather(
                 dyn_obs_rpos_expanded,
                 1,
                 closest_dyn_obs_idx.unsqueeze(-1).expand(-1, -1, 3),
             )
 
-            # 转换到目标坐标系
+            # 最近N个障碍物的相对位置 [num_envs, N, 3] (目标坐标系)
             closest_dyn_obs_rpos_g = vec_to_new_frame(
                 closest_dyn_obs_rpos, target_dir_2d
             )
             closest_dyn_obs_rpos_g[dyn_obs_range_mask] = 0.0  # 超出范围的置零
 
-            # 计算距离
-            closest_dyn_obs_distance = closest_dyn_obs_rpos.norm(dim=-1, keepdim=True)
-            closest_dyn_obs_distance_2d = closest_dyn_obs_rpos_g[..., :2].norm(
-                dim=-1, keepdim=True
-            )
-            closest_dyn_obs_distance_z = closest_dyn_obs_rpos_g[..., 2].unsqueeze(-1)
-            closest_dyn_obs_rpos_gn = (
+            # 计算动态障碍位置相关
+            closest_dyn_obs_distance = closest_dyn_obs_rpos_g.norm(dim=-1, keepdim=True) # 3D相对距离（目标坐标系）
+            closest_dyn_obs_distance_2d = closest_dyn_obs_rpos_g[..., :2].norm( dim=-1, keepdim=True) # 2D相对距离（目标坐标系）
+            closest_dyn_obs_distance_z = closest_dyn_obs_rpos_g[..., 2].unsqueeze(-1) # z轴差（目标坐标系）
+            closest_dyn_obs_rpos_gn = ( # 单位向量（目标坐标系）
                 closest_dyn_obs_rpos_g / closest_dyn_obs_distance.clamp(1e-6)
             )
 
@@ -1338,29 +1321,26 @@ class NavigationEnv(IsaacEnv):
             closest_dyn_obs_size = self.dyn_obs_size[closest_dyn_obs_idx]
             closest_dyn_obs_width = closest_dyn_obs_size[..., 0].unsqueeze(-1)
 
-            # 宽度类别：[0, 1, 2, 3]
-            closest_dyn_obs_width_category = (
-                closest_dyn_obs_width / self.dyn_obs_width_res - 1.0
-            )
-            closest_dyn_obs_width_category[dyn_obs_range_mask] = 0.0
+            # 宽度类别：[1, 2, 3, 4]
+            closest_dyn_obs_width_category = (closest_dyn_obs_width / self.dyn_obs_width_res)
+            closest_dyn_obs_width_category[dyn_obs_range_mask] = 0.0 # 对超出有效范围的障碍物宽度类别置零
 
             closest_dyn_obs_height = closest_dyn_obs_size[..., 2].unsqueeze(-1)
-
-            # 高度类别：0表示2D障碍物，其他表示3D
+            # 高度类别：1表示2D圆柱体，2表示3D立方体
             closest_dyn_obs_height_category = torch.where(
                 closest_dyn_obs_height > self.max_obs_3d_height,
-                torch.tensor(0.0),
-                closest_dyn_obs_height,
+                torch.tensor(1.0, device=self.cfg.device),  # 2D圆柱体
+                torch.tensor(2.0, device=self.cfg.device),  # 3D立方体
             )
-            closest_dyn_obs_height_category[dyn_obs_range_mask] = 0.0
+            closest_dyn_obs_height_category[dyn_obs_range_mask] = 0.0 # 对超出有效范围的障碍物高度类别置零
 
             # 组合动态障碍物状态 [num_envs, 1, N, 10]
             dyn_obs_states = torch.cat(
                 [
-                    closest_dyn_obs_rpos_gn,  # 归一化相对位置 (3)
-                    closest_dyn_obs_distance_2d,  # 水平距离 (1)
-                    closest_dyn_obs_distance_z,  # 垂直距离 (1)
-                    closest_dyn_obs_vel_g,  # 速度 (3)
+                    closest_dyn_obs_rpos_gn,  # 单位向量（目标坐标系） (3)
+                    closest_dyn_obs_distance_2d,  # 2D距离（目标坐标系） (1)
+                    closest_dyn_obs_distance_z,  # z轴差（目标坐标系） (1)
+                    closest_dyn_obs_vel_g,  # 速度（目标坐标系） (3)
                     closest_dyn_obs_width_category,  # 宽度类别 (1)
                     closest_dyn_obs_height_category,  # 高度类别 (1)
                 ],
@@ -1370,33 +1350,30 @@ class NavigationEnv(IsaacEnv):
                 dyn_obs_states, nan=0.0, posinf=0.0, neginf=0.0
             )
 
-            # d. 碰撞检测
-            closest_dyn_obs_distance_2d_collsion = closest_dyn_obs_rpos[..., :2].norm(
-                dim=-1, keepdim=True
-            )
-            closest_dyn_obs_distance_2d_collsion[dyn_obs_range_mask] = float("inf")
-            closest_dyn_obs_distance_zn_collision = (
-                closest_dyn_obs_rpos[..., 2].unsqueeze(-1).norm(dim=-1, keepdim=True)
-            )
-            closest_dyn_obs_distance_zn_collision[dyn_obs_range_mask] = float("inf")
+            # d. 碰撞检测（世界坐标系）
+            closest_dyn_obs_distance_2d_collision = closest_dyn_obs_rpos[..., :2].norm(dim=-1, keepdim=True)
+            closest_dyn_obs_distance_2d_collision[dyn_obs_range_mask] = float("inf") # 对超出有效范围的障碍物2D距离置无穷大
 
-            # 2D和Z方向同时满足才认为碰撞
-            dynamic_collision_2d = closest_dyn_obs_distance_2d_collsion <= (
-                closest_dyn_obs_width / 2.0 + 0.3
+            closest_dyn_obs_distance_zn_collision = closest_dyn_obs_rpos[..., 2].abs().unsqueeze(-1)
+            closest_dyn_obs_distance_zn_collision[dyn_obs_range_mask] = float("inf") # 对超出有效范围的障碍物垂直高度差置无穷大
+
+            dynamic_collision_2d = closest_dyn_obs_distance_2d_collision <= ( # 2D碰撞检测
+                closest_dyn_obs_width / 2.0 + 0.25
             )
-            dynamic_collision_z = closest_dyn_obs_distance_zn_collision <= (
-                closest_dyn_obs_height / 2.0 + 0.3
+            dynamic_collision_z = closest_dyn_obs_distance_zn_collision <= ( # Z碰撞检测
+                closest_dyn_obs_height / 2.0 + 0.15
             )
-            dynamic_collision_each = dynamic_collision_2d & dynamic_collision_z
-            dynamic_collision = torch.any(
+            dynamic_collision_each = dynamic_collision_2d & dynamic_collision_z # 2D和Z方向同时满足才认为碰撞
+
+            dynamic_collision = torch.any( # 检查是否存在任意一个障碍物导致碰撞
                 dynamic_collision_each, dim=1
-            )  # 形状: (num_envs,)
+            )  # 形状: (num_envs, 1)
 
-            # 用于奖励计算的动态障碍物距离
+            # 用于奖励计算的动态障碍物距离（目标坐标系）
             closest_dyn_obs_distance_reward = (
-                closest_dyn_obs_rpos.norm(dim=-1) - closest_dyn_obs_size[..., 0] / 2.0
+                closest_dyn_obs_distance.squeeze(-1) - closest_dyn_obs_size[..., 0] / 2.0
             )
-            closest_dyn_obs_distance_reward[dyn_obs_range_mask] = (
+            closest_dyn_obs_distance_reward[dyn_obs_range_mask] = ( # 超出感知范围的障碍物，将其距离设为激光雷达最大探测距离
                 self.cfg.sensor.lidar_range
             )
 
