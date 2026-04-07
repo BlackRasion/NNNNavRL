@@ -713,40 +713,36 @@ class NavigationEnv(IsaacEnv):
     def _set_specs(self):
         """
         定义观测、动作、奖励等空间规格
-
-        TorchRL 使用这些规格来验证数据形状和类型，确保数据一致性。
-
         观测空间组成：
         --------------
-        1. **state**: Go2机器人内部状态 (8维) ← 优化：从13维减少到8维
-           - 相对位置归一化向量 (2维) ← 优化：只保留水平方向
-           - 水平距离 (1维) ← 优化：合并x/y距离
-           - 速度向量 (2维) ← 优化：只保留水平速度
-           - 机器人朝向yaw角 (1维)
+        1. state: Go2机器人内部状态 (7维)
+           - 相于目标位置的水平单位向量 (2维)
+           - 水平距离 (1维)
+           - 水平速度 (2维)
            - 目标相对角度 (1维)
-           - yaw角速度 (1维) ← 优化：只保留yaw角速度
+           - yaw角速度 (1维)
 
-        2. **lidar**: LiDAR扫描数据 (1×36×3)
+        2. lidar: LiDAR扫描数据 (1×36×3)
            - 1个通道
            - 36个水平光束
            - 3个垂直光束
 
-        3. **direction**: 目标方向向量 (3维)
+        3. direction: 目标方向向量 (3维)    
            - 用于坐标变换
 
-        4. **dynamic_obstacle**: 动态障碍物状态 (1×N×10)
+        4. dynamic_obstacle: 动态障碍物状态 (1×N×10)
            - N个最近障碍物
            - 每个障碍物10维状态
 
         动作空间：
         ----------
         - Go2机器人动作空间 (3维速度控制)
-          - 前进速度
-          - 侧向速度
-          - 旋转速度
+          - x速度
+          - y速度
+          - yaw速度
         """
         # 观测维度定义
-        observation_dim = 8  # Go2机器人内部状态维度
+        observation_dim = 7  # Go2机器人内部状态维度
         num_dim_each_dyn_obs_state = 10  # 每个动态障碍物的状态维度
 
         # =========================================================================
@@ -758,8 +754,8 @@ class NavigationEnv(IsaacEnv):
                     {
                         "observation": CompositeSpec(
                             {
-                                # Go2机器人内部状态（优化：8维）
-                                # [相对位置(2), 水平距离(1), 速度(2), 朝向(1), 目标角度(1), yaw角速度(1)] = 8维
+                                # Go2机器人内部状态（7维）
+                                # [相对于目标位置的水平单位向量(2), 水平距离(1), 水平速度(2), 目标相对角度(1), yaw角速度(1)] = 7维
                                 "state": UnboundedContinuousTensorSpec(
                                     (observation_dim,), device=self.cfg.device
                                 ),
@@ -774,7 +770,7 @@ class NavigationEnv(IsaacEnv):
                                     (1, 3), device=self.cfg.device
                                 ),
                                 # 动态障碍物状态
-                                # [1, N, 10] (N=最近障碍物数)
+                                # [1, N, 10] 
                                 "dynamic_obstacle": UnboundedContinuousTensorSpec(
                                     (
                                         1,
@@ -1138,14 +1134,13 @@ class NavigationEnv(IsaacEnv):
 
         观测空间详解：
         --------------
-        1. **LiDAR观测：
+        1. LiDAR观测：
            - 格式：[num_envs, 1, 36, 3]
            - 值：探测距离（值越大表示障碍物越近）
-           - 用途：感知周围障碍物分布
 
-        2. **机器人状态**：
-           - 格式：[num_envs, 8]
-           - 内容：[相对位置归一化(2), 水平距离(1), 水平速度(2), yaw(1), 目标相对角(1), yaw角速度(1)]
+        2. 机器人状态：
+           - 格式：[num_envs, 7]
+           - 内容：[相对于目标位置的水平单位向量(2), 水平距离(1), 水平速度(2), 目标相对角(1), yaw角速度(1)]
            - 坐标系：目标坐标系（旋转不变）
 
         3. 动态障碍物状态：
@@ -1179,8 +1174,7 @@ class NavigationEnv(IsaacEnv):
         )
         self.lidar_scan = torch.nan_to_num(
             self.lidar_scan, nan=0.0, posinf=0.0, neginf=0.0
-        )
-        # 结果：值越大表示障碍物越近（探测范围 - 实际距离）
+        ) # 结果：值越大表示障碍物越近（探测范围 - 实际距离）
 
         # =========================================================================
         # 步骤3：计算机器人内部状态观测
@@ -1197,16 +1191,9 @@ class NavigationEnv(IsaacEnv):
         target_dir_2d[..., 2] = 0  # 只考虑水平方向
 
         # c. 单位方向向量（世界坐标 -> 目标坐标系）
-        # 优化：只计算水平方向的归一化向量
-        rpos_clipped = rpos_2d / distance_2d.clamp(1e-6)  # 只归一化水平分量
-        # 扩展到3D（z分量为0）
-        rpos_clipped_3d = torch.cat(
-            [rpos_clipped, torch.zeros_like(rpos_clipped[..., :1])], dim=-1
-        )
-        # 转换到目标坐标系
-        rpos_clipped_g = vec_to_new_frame(rpos_clipped_3d, target_dir_2d)
-        # 优化：只保留水平分量（2维）
-        rpos_clipped_g_2d = rpos_clipped_g[..., :2]
+        rpos_g = vec_to_new_frame(rpos, target_dir_2d)
+        rpos_g_2d = rpos_g[..., :2]
+        rpos_clipped_g_2d = rpos_g_2d / rpos_g_2d.norm(dim=-1, keepdim=True).clamp(1e-6)
 
         # d. 速度（世界坐标 -> 目标坐标系）
         vel_w = self.root_state[..., 7:10]  # 世界坐标系下的速度
@@ -1214,11 +1201,8 @@ class NavigationEnv(IsaacEnv):
         # 优化：只保留水平速度（2维）
         vel_g_2d = vel_g[..., :2]
 
-        # =========================================================================
-        # 新增：计算机器人朝向和目标相对角度
-        # =========================================================================
-        # e. 计算机器人朝向（yaw角）
-        # 四元数转欧拉角（yaw）
+        # e. 计算目标相对角度（目标方向 - 机器人朝向）
+        # 计算机器人朝向（yaw角）
         # yaw = atan2(2*(w*z + x*y), 1 - 2*(y^2 + z^2))
         robot_quat = self.root_state[..., 3:7]  # [w, x, y, z]
         robot_yaw = torch.atan2(
@@ -1230,30 +1214,26 @@ class NavigationEnv(IsaacEnv):
             1.0 - 2.0 * (robot_quat[..., 2] ** 2 + robot_quat[..., 3] ** 2),
         )
 
-        # f. 计算目标相对角度（目标方向 - 机器人朝向）
-        # 优化：只计算水平方向的角度
-        # 目标方向角度（水平面内）
-        target_angle_world = torch.atan2(rpos_2d[..., 1], rpos_2d[..., 0])
-        # 目标相对角度（在机器人坐标系中）
-        target_angle_relative = target_angle_world - robot_yaw
-        # 归一化到 [-pi, pi]
-        target_angle_relative = torch.atan2(
+        target_angle_world = torch.atan2(rpos_2d[..., 1], rpos_2d[..., 0])  # 目标方向角度（水平面内）
+        
+        target_angle_relative = target_angle_world - robot_yaw  # 目标相对角度（在机器人坐标系中）
+        
+        target_angle_relative = torch.atan2(    # 归一化到 [-pi, pi]
             torch.sin(target_angle_relative), torch.cos(target_angle_relative)
         )
 
-        # g. yaw角速度（优化：只保留yaw角速度）
+        # f. yaw角速度
         angular_vel_yaw = self.root_state[..., 12]  # 只取yaw角速度 (wz)
 
-        # 组合机器人状态（优化：8维）
-        # [相对位置(2), 水平距离(1), 速度(2), 朝向(1), 目标角度(1), yaw角速度(1)] = 8维
+        # 组合机器人状态（优化：7维）
+        # [相对位置(2), 水平距离(1), 速度(2), 目标角度(1), yaw角速度(1)] = 7维
         robot_state = torch.cat(
             [
-                rpos_clipped_g_2d,  # 相对位置 (2) ← 优化：只保留水平分量
-                distance_2d,  # 水平距离 (1) ← 优化：合并x/y距离
-                vel_g_2d,  # 速度 (2) ← 优化：只保留水平速度
-                robot_yaw.unsqueeze(-1),  # 机器人朝向 (1)
+                rpos_clipped_g_2d,  # 相于目标位置的水平单位向量 (2)
+                distance_2d,  # 水平距离 (1)
+                vel_g_2d,  # 水平速度 (2)
                 target_angle_relative.unsqueeze(-1),  # 目标相对角度 (1)
-                angular_vel_yaw.unsqueeze(-1),  # yaw角速度 (1) ← 优化：只保留yaw
+                angular_vel_yaw.unsqueeze(-1),  # yaw角速度 (1) 
             ],
             dim=-1,
         ).squeeze(1)

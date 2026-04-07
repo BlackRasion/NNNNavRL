@@ -4,7 +4,7 @@ PPO (Proximal Policy Optimization) 算法实现 - Go2 四足机器人导航
 该文件实现了 Go2 四足机器人的 PPO 算法，包括：
 1. 特征提取器（CNN + MLP）
    - LiDAR 静态障碍物特征: [batch, 1, 36, 3] -> 128 维
-   - 机器人状态特征: 8 维 (位置、速度、方向等)
+   - 机器人状态特征: 7 维 (位置、速度、方向等)
    - 动态障碍物特征: [batch, 1, 5, 10] -> 64 维
 2. Actor 网络（Beta 分布策略）
    - 输出动作维度: 3 (Vx, Vy, Vyaw)
@@ -79,9 +79,9 @@ class PPO(TensorDictModuleBase):
 
         # 1.3 组合特征提取器
         # - 静态障碍物特征 (LiDAR): 128 维
-        # - 机器人内部状态特征 (位置、速度、方向等): 来自 observation.state 8 维
+        # - 机器人内部状态特征 (位置、速度、方向等): 来自 observation.state 7 维
         # - 动态障碍物特征: 64 维
-        # - 总特征维度: 128 + 8 + 64 = 200 维
+        # - 总特征维度: 128 + 7 + 64 = 199 维
         self.feature_extractor = TensorDictSequential(
             TensorDictModule(
                 feature_extractor_network,
