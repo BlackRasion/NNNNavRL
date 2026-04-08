@@ -18,66 +18,15 @@ class Go2VelocityController(nn.Module):
     def __init__(
         self,
         dt: float = 0.016,
-        action_limit: float = 2.0,
-        max_linear_vel: float = 2.5,
-        max_angular_vel: float = 1.57,
-        smoothing_alpha: float = 0.3,
     ):
         super().__init__()
         self.dt = dt
-        self.max_linear_vel = nn.Parameter(
-            torch.tensor(max_linear_vel), requires_grad=False
-        )
-        self.max_angular_vel = nn.Parameter(
-            torch.tensor(max_angular_vel), requires_grad=False
-        )
-        self.action_limit = nn.Parameter(
-            torch.tensor(action_limit), requires_grad=False
-        )
-        self.smoothing_alpha = nn.Parameter(
-            torch.tensor(smoothing_alpha), requires_grad=False
-        )
-        self._prev_velocity_commands = None
-
-    def _map_to_velocity(self, actions: torch.Tensor) -> torch.Tensor:
-        scale_linear = self.max_linear_vel / self.action_limit
-        scale_angular = self.max_angular_vel / self.action_limit
-        vx = actions[..., 0] * scale_linear
-        vy = actions[..., 1] * scale_linear
-        vyaw = actions[..., 2] * scale_angular
-        return torch.stack([vx, vy, vyaw], dim=-1)
-
-    def _smooth_velocity(self, velocity_commands: torch.Tensor) -> torch.Tensor:
-        if (
-            self._prev_velocity_commands is None
-            or self._prev_velocity_commands.shape != velocity_commands.shape
-            or self._prev_velocity_commands.device != velocity_commands.device
-        ):
-            self._prev_velocity_commands = velocity_commands.clone()
-            return velocity_commands
-        alpha = torch.clamp(self.smoothing_alpha, 0.0, 1.0)
-        smoothed = (
-            alpha * velocity_commands + (1.0 - alpha) * self._prev_velocity_commands
-        )
-        self._prev_velocity_commands = smoothed.clone()
-        return smoothed
 
     def forward(
         self, actions: torch.Tensor, emergency_stop: torch.Tensor | None = None
     ) -> torch.Tensor:
         actions = torch.nan_to_num(actions, nan=0.0, posinf=0.0, neginf=0.0)
-        actions = torch.clamp(actions, -self.action_limit, self.action_limit)
-        velocity_commands = self._map_to_velocity(actions)
-        velocity_commands = self._smooth_velocity(velocity_commands)
-        velocity_commands[..., 0] = torch.clamp(
-            velocity_commands[..., 0], -self.max_linear_vel, self.max_linear_vel
-        )
-        velocity_commands[..., 1] = torch.clamp(
-            velocity_commands[..., 1], -self.max_linear_vel, self.max_linear_vel
-        )
-        velocity_commands[..., 2] = torch.clamp(
-            velocity_commands[..., 2], -self.max_angular_vel, self.max_angular_vel
-        )
+        velocity_commands = actions
         if emergency_stop is not None:
             mask = emergency_stop.to(dtype=torch.bool, device=velocity_commands.device)
             while mask.dim() < velocity_commands.dim():

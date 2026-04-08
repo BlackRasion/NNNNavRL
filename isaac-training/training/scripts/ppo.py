@@ -169,17 +169,12 @@ class PPO(TensorDictModuleBase):
 
     def __call__(self, tensordict):
         """
-        前向传播: 根据观测生成动作（修复版 - 使用机器人坐标系）
+        前向传播: 根据观测生成动作
 
         参数:
             tensordict: 包含观测数据的 TensorDict
         返回:
             tensordict: 添加了动作和价值估计的 TensorDict
-
-        关键改进：
-        - 策略输出机器人坐标系下的速度命令（Vx, Vy, Vyaw）
-        - 不再转换到世界坐标系，避免坐标系混乱
-        - 状态空间已包含机器人朝向信息，策略可以学习正确的运动方向
         """
         self.feature_extractor(tensordict)  # 提取特征
         self.actor(tensordict)  # Actor 前向: 采样动作 (归一化到 0-1)
@@ -188,20 +183,12 @@ class PPO(TensorDictModuleBase):
         # =========================================================================
         # 动作处理：将归一化动作映射到实际速度范围
         # =========================================================================
-        # 策略输出机器人坐标系下的速度命令：
-        # - Vx: 前进速度（正值前进，负值后退）
-        # - Vy: 横向速度（正值左移，负值右移）
-        # - Vyaw: 旋转速度（正值逆时针旋转，负值顺时针旋转）
-
+        # 策略输出机器人坐标系下的速度命令(Vx, Vy, Vyaw)
         # 将归一化动作 (0,1) 映射到实际速度范围 [-action_limit, action_limit]
         actions = (
             2 * tensordict["agents", "action_normalized"] - 1.0
         ) * self.cfg.actor.action_limit
-
-        # ❌ 删除世界坐标系转换（避免坐标系混乱）
-        # 现在策略直接输出机器人坐标系下的速度命令
-        # actions_world = vec_to_world(actions, tensordict["agents", "observation", "direction"])
-
+        
         tensordict["agents", "action"] = actions
         return tensordict
 
