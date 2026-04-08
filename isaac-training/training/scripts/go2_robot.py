@@ -289,17 +289,12 @@ class Go2Robot(RobotBase):
         应用速度控制动作
 
         该方法将归一化的动作转换为实际速度命令，并应用到机器人。
-        这是训练过程中策略网络与环境交互的核心接口。
 
         参数:
             actions: 速度命令张量，形状为 [..., 3]
-                    - actions[..., 0]: Vx（前进速度，m/s）
-                    - actions[..., 1]: Vy（横向速度，m/s）
-                    - actions[..., 2]: Vyaw（角速度，rad/s）
 
         返回:
             applied_actions: 实际应用的速度命令 [Vx, Vy, Vyaw]
-                           单位：m/s (线速度), rad/s (角速度)
         """
         if actions.dim() == 1:
             actions = actions.unsqueeze(0)
@@ -397,7 +392,7 @@ class Go2Robot(RobotBase):
 
         return state
 
-    def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
+    def _reset_idx_vel(self, env_ids: torch.Tensor, train: bool = True):
         """
         重置指定环境的机器人状态
 

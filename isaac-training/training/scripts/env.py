@@ -1,12 +1,11 @@
 """
-Navigation Environment for Go2 Robot Navigation with Reinforcement Learning
 Go2 机器人导航强化学习环境
 
-该文件实现了 NavigationEnv 类，是 NavRL 项目的核心环境模块。
+该文件实现了 NavigationEnv 类，是项目的核心环境模块。
 基于 NVIDIA Isaac Sim 仿真平台，支持：
-- Go2 四足机器人物理仿真
+- 地面移动机器人物理仿真
 - 构建静态和动态障碍物
-- 多模态观测（LiDAR + 内部状态 + 动态障碍物）
+- 多模态观测（LiDAR静态障碍物 + 机器人自身状态 + 动态障碍物）
 - 观测空间格式定义
 - 动作空间格式定义
 - 奖励设计
@@ -41,9 +40,9 @@ from utils import vec_to_new_frame, construct_input
 
 class NavigationEnv(IsaacEnv):
     """
-    导航环境类 - Go2机器人强化学习训练环境
+    导航环境类 - 地面移动机器人强化学习训练环境
 
-    继承自 IsaacEnv，实现 Go2 四足机器人在复杂动态环境中的自主导航任务。
+    继承自 IsaacEnv，实现 地面移动机器人在复杂动态环境中的自主导航任务。
     该环境支持多环境并行仿真，提供多模态观测空间和丰富的奖励信号。
 
     核心特性：
@@ -74,7 +73,7 @@ class NavigationEnv(IsaacEnv):
 
     属性：
     ------
-    - go2: Go2机器人实例
+    - go2: 地面移动机器人物体实例
     - lidar: LiDAR传感器实例
     - target_pos: 目标位置 [num_envs, 1, 3]
     - target_dir: 目标方向向量 [num_envs, 1, 3]
@@ -85,11 +84,6 @@ class NavigationEnv(IsaacEnv):
     def __init__(self, cfg: object):
         """
         初始化导航环境
-
-        参数：
-        ------
-        cfg : object
-            配置对象，包含环境、传感器、机器人等参数
         """
         # =========================================================================
         # LiDAR 传感器参数配置
@@ -145,13 +139,16 @@ class NavigationEnv(IsaacEnv):
             self.target_dir = torch.zeros(self.num_envs, 1, 3)  # 目标方向向量：用于坐标变换 
             self.prev_robot_vel_w = torch.zeros(self.num_envs, 1, 3)  # 上一时刻机器人速度：用于计算平滑性奖励 
             self.reward = torch.zeros(self.num_envs, 1)  # 奖励：初始化为零 
+        
+        # 随机选择目标掩码索引
+        self._target_mask_idx = torch.zeros(self.num_envs, dtype=torch.int32, device=self.cfg.device)
 
     def _design_scene(self):
         """
         设计仿真场景
 
         创建完整的仿真环境，包括：
-        1. Go2 机器人
+        1. 地面移动机器人
         2. 光照系统
         3. 地平面
         4. 静态障碍物地形
@@ -164,7 +161,7 @@ class NavigationEnv(IsaacEnv):
             机器人 prim 路径列表
         """
         # =========================================================================
-        # 1. 创建 Go2 机器人
+        # 1. 创建 地面移动机器人
         # =========================================================================
         self.go2 = Go2Robot()
         # 在高度0.4米处生成机器人（确保机器人站立在地面上）
@@ -251,9 +248,6 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         self._create_boundary_walls()
 
-        # 更新有效导航区域（围墙内部）
-        self.nav_area_range = self.map_range[0] + 2.5  # 22.5m
-
         # =========================================================================
         # 6. 创建动态障碍物（如果启用）
         # =========================================================================
@@ -268,9 +262,9 @@ class NavigationEnv(IsaacEnv):
         """
         # 围墙参数
         wall_height = 6.0  # 围墙高度（米）
-        wall_thickness = 0.3  # 围墙厚度（米）
+        wall_thickness = 0.4  # 围墙厚度（米）
         wall_position = self.map_range[0] + 4  # 围墙位置（距离中心） 24m
-        wall_length = wall_position * 2  # 围墙长度
+        wall_length = (wall_position + 0.1) * 2  # 围墙长度
 
         wall_material = sim_utils.PreviewSurfaceCfg(    # 围墙材质配置（与地面颜色一致）
             diffuse_color=(0.1, 0.1, 0.1),
@@ -324,7 +318,7 @@ class NavigationEnv(IsaacEnv):
 
         动态障碍物分类：
         - 3D立方体，可在空中漂浮
-        - 2D圆柱体，只能水平移动
+        - 2D圆柱体，只能地面移动
 
         尺寸分类：
         - 宽度分为 N_w=4 个区间
@@ -622,32 +616,33 @@ class NavigationEnv(IsaacEnv):
 
         # 距离小于阈值（0.5米）则需要新目标
         dyn_obs_new_goal_mask = dyn_obs_goal_dist < 0.5
-        num_new_goal = torch.sum(dyn_obs_new_goal_mask)
+        num_new_goal = int(dyn_obs_new_goal_mask.sum().item())
 
         # 在局部范围内随机采样新目标
-        sample_x_local = -self.cfg.env_dyn.local_range[
-            0
-        ] + 2.0 * self.cfg.env_dyn.local_range[0] * torch.rand(
-            num_new_goal, 1, dtype=torch.float, device=self.cfg.device
-        )
-        sample_y_local = -self.cfg.env_dyn.local_range[
-            1
-        ] + 2.0 * self.cfg.env_dyn.local_range[1] * torch.rand(
-            num_new_goal, 1, dtype=torch.float, device=self.cfg.device
-        )
-        sample_z_local = -self.cfg.env_dyn.local_range[
-            2
-        ] + 2.0 * self.cfg.env_dyn.local_range[2] * torch.rand(
-            num_new_goal, 1, dtype=torch.float, device=self.cfg.device
-        )
-        sample_goal_local = torch.cat(
-            [sample_x_local, sample_y_local, sample_z_local], dim=1
-        )
+        if num_new_goal > 0:
+            sample_x_local = -self.cfg.env_dyn.local_range[
+                0
+            ] + 2.0 * self.cfg.env_dyn.local_range[0] * torch.rand(
+                num_new_goal, 1, dtype=torch.float, device=self.cfg.device
+            )
+            sample_y_local = -self.cfg.env_dyn.local_range[
+                1
+            ] + 2.0 * self.cfg.env_dyn.local_range[1] * torch.rand(
+                num_new_goal, 1, dtype=torch.float, device=self.cfg.device
+            )
+            sample_z_local = -self.cfg.env_dyn.local_range[
+                2
+            ] + 2.0 * self.cfg.env_dyn.local_range[2] * torch.rand(
+                num_new_goal, 1, dtype=torch.float, device=self.cfg.device
+            )
+            sample_goal_local = torch.cat(
+                [sample_x_local, sample_y_local, sample_z_local], dim=1
+            )
 
-        # 将局部目标转换到全局坐标
-        self.dyn_obs_goal[dyn_obs_new_goal_mask] = (
-            self.dyn_obs_origin[dyn_obs_new_goal_mask] + sample_goal_local
-        )
+            # 将局部目标转换到全局坐标
+            self.dyn_obs_goal[dyn_obs_new_goal_mask] = (
+                self.dyn_obs_origin[dyn_obs_new_goal_mask] + sample_goal_local
+            )
 
         # 限制在地图范围内
         self.dyn_obs_goal[:, 0] = torch.clamp(
@@ -668,7 +663,7 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 步骤2：每约2秒随机改变速度
         # =========================================================================
-        update_interval = int(2.0 / self.cfg.sim.dt)  # 更新间隔（步数）
+        update_interval = int(2.0 / self.cfg.sim.dt)  # 更新间隔（步数） 2.0/0.016 = 128
         if self.dyn_obs_step_count % update_interval == 0:
             # 随机采样速度大小
             self.dyn_obs_vel_norm = self.cfg.env_dyn.vel_range[0] + (
@@ -715,7 +710,7 @@ class NavigationEnv(IsaacEnv):
         定义观测、动作、奖励等空间规格
         观测空间组成：
         --------------
-        1. state: Go2机器人内部状态 (7维)
+        1. state: 地面移动机器人内部状态 (7维)
            - 相于目标位置的水平单位向量 (2维)
            - 水平距离 (1维)
            - 水平速度 (2维)
@@ -727,7 +722,7 @@ class NavigationEnv(IsaacEnv):
            - 36个水平光束
            - 3个垂直光束
 
-        3. direction: 目标方向向量 (3维)    
+        3. direction: 目标方向向量 (3维) - 没有用于PPO输入
            - 用于坐标变换
 
         4. dynamic_obstacle: 动态障碍物状态 (1×N×10)
@@ -736,13 +731,13 @@ class NavigationEnv(IsaacEnv):
 
         动作空间：
         ----------
-        - Go2机器人动作空间 (3维速度控制)
+        - 地面移动机器人动作空间 (3维速度控制)
           - x速度
           - y速度
           - yaw速度
         """
         # 观测维度定义
-        observation_dim = 7  # Go2机器人内部状态维度
+        observation_dim = 7  # 地面移动机器人内部状态维度
         num_dim_each_dyn_obs_state = 10  # 每个动态障碍物的状态维度
 
         # =========================================================================
@@ -754,13 +749,11 @@ class NavigationEnv(IsaacEnv):
                     {
                         "observation": CompositeSpec(
                             {
-                                # Go2机器人内部状态（7维）
-                                # [相对于目标位置的水平单位向量(2), 水平距离(1), 水平速度(2), 目标相对角度(1), yaw角速度(1)] = 7维
+                                # 地面移动机器人内部状态（7维） [相对于目标位置的水平单位向量(2), 水平距离(1), 水平速度(2), 目标相对角度(1), yaw角速度(1)] = 7维
                                 "state": UnboundedContinuousTensorSpec(
                                     (observation_dim,), device=self.cfg.device
                                 ),
-                                # LiDAR扫描数据
-                                # [1, 36, 3] (通道, 水平光束, 垂直光束)
+                                # LiDAR扫描数据 [1, 36, 3] (通道, 水平光束, 垂直光束)
                                 "lidar": UnboundedContinuousTensorSpec(
                                     (1, self.lidar_hbeams, self.lidar_vbeams),
                                     device=self.cfg.device,
@@ -769,8 +762,7 @@ class NavigationEnv(IsaacEnv):
                                 "direction": UnboundedContinuousTensorSpec(
                                     (1, 3), device=self.cfg.device
                                 ),
-                                # 动态障碍物状态
-                                # [1, N, 10] 
+                                # 动态障碍物状态 [1, N, 10]
                                 "dynamic_obstacle": UnboundedContinuousTensorSpec(
                                     (
                                         1,
@@ -870,7 +862,7 @@ class NavigationEnv(IsaacEnv):
             CompositeSpec(
                 {
                     # 机器人完整状态 [位置(3), 四元数(4), 速度(3), 角速度(3)]
-                    "robot_state": UnboundedContinuousTensorSpec(
+                    "robot_state_info": UnboundedContinuousTensorSpec(
                         (1, 13), device=self.cfg.device
                     ),
                 }
@@ -883,7 +875,7 @@ class NavigationEnv(IsaacEnv):
         self.observation_spec["stats"] = stats_spec
         self.observation_spec["info"] = info_spec
 
-        # 初始化统计和信息张量（手动初始化以确保形状正确）
+        # 初始化统计和信息张量
         self.stats = TensorDict(
             {
                 "return": torch.zeros(self.num_envs, 1, device=self.cfg.device),
@@ -910,7 +902,7 @@ class NavigationEnv(IsaacEnv):
 
         self.info = TensorDict(
             {
-                "robot_state": torch.zeros(self.num_envs, 1, 13, device=self.cfg.device),
+                "robot_state_info": torch.zeros(self.num_envs, 1, 13, device=self.cfg.device),
             },
             batch_size=[self.num_envs],
             device=self.cfg.device,
@@ -921,8 +913,8 @@ class NavigationEnv(IsaacEnv):
         重置目标位置
 
         根据训练或评估模式设置目标位置：
-        - 训练模式：随机生成目标位置（四个方向之一）
-        - 评估模式：固定目标位置
+        - 训练模式：随机生成目标位置
+        - 评估模式：固定目标位置（所有环境在x轴一条线上，y=-22.5）
 
         参数：
         ----------
@@ -931,10 +923,6 @@ class NavigationEnv(IsaacEnv):
 
         目标位置设计：
         --------------
-        训练模式下，目标点限制在围墙内部
-        - 四个方向：前方(0, 16)、后方(0, -16)、右方(16, 0)、左方(-16, 0)
-        - 每个方向有一定随机偏移
-        - 高度在 [0.5, 2.5] 米范围内随机
         """
         if self.training:
             # 训练模式：随机选择四个方向之一
@@ -962,7 +950,11 @@ class NavigationEnv(IsaacEnv):
             )
 
             # 随机选择方向
-            mask_indices = np.random.randint(0, masks.size(0), size=env_ids.size(0))
+            mask_indices = torch.randint(
+                0, masks.size(0), (env_ids.size(0),), device=self.cfg.device
+            )
+            # 记录选择的方向掩码
+            self._target_mask_idx[env_ids] = mask_indices
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
 
@@ -981,16 +973,17 @@ class NavigationEnv(IsaacEnv):
             self.target_pos[env_ids] = target_pos
         else:
             # 评估模式：固定目标位置（所有环境在一条线上）
-            # x坐标：从-0.5到0.5均匀分布，缩放22.5倍
-            self.target_pos[:, 0, 0] = torch.linspace(-0.5, 0.5, self.num_envs) * 22.5
-            # y坐标：固定在-22.5米
-            self.target_pos[:, 0, 1] = -22.5
-            # z坐标：固定在机器人质心高度
-            self.target_pos[:, 0, 2] = 0.4
+            # 先构建全局固定评估轨迹，再按 env_ids 取子集
+            env_ids = env_ids.to(device=self.cfg.device, dtype=torch.long)
+            eval_x = torch.linspace(-0.5, 0.5, self.num_envs, device=self.cfg.device) * 22.5  # x坐标：从-0.5到0.5均匀分布，缩放22.5倍
+            self.target_pos[env_ids, 0, 0] = eval_x[env_ids]
+            self.target_pos[env_ids, 0, 1] = -22.5  # y坐标：固定在-22.5米
+            self.target_pos[env_ids, 0, 2] = 0.4    # z坐标：固定在机器人质心高度
 
     def _reset_idx(self, env_ids: torch.Tensor):
         """
         重置指定的 Go2 机器人状态
+        在env.reset() 或 env.step()后调用
 
         重置内容包括：
         1. 机器人物理状态（位置、姿态、速度）
@@ -1002,8 +995,8 @@ class NavigationEnv(IsaacEnv):
         env_ids : torch.Tensor
             需要重置的机器人 ID 张量
         """
-        # 重置 Go2 机器人物理状态
-        self.go2._reset_idx(env_ids, self.training)
+        # 重置机器人速度
+        self.go2._reset_idx_vel(env_ids, self.training)
 
         # 重置目标位置
         self.reset_target(env_ids)
@@ -1027,24 +1020,9 @@ class NavigationEnv(IsaacEnv):
             )
 
             # 确保起始位置和目标位置不在同一方向
-            # 选择与目标位置相反的方向
-            target_directions = self.target_pos[env_ids, 0, :2]
-            target_angles = torch.atan2(target_directions[..., 1], target_directions[..., 0])
-            
-            # 将角度映射到四个方向（前方=0, 后方=1, 右方=2, 左方=3）
-            target_direction_idx = torch.zeros(env_ids.size(0), dtype=torch.long, device=self.cfg.device)
-            target_direction_idx[torch.abs(target_angles) < torch.pi/4] = 0  # 前方
-            target_direction_idx[torch.abs(target_angles - torch.pi) < torch.pi/4] = 1  # 后方
-            target_direction_idx[torch.abs(target_angles - torch.pi/2) < torch.pi/4] = 2  # 右方
-            target_direction_idx[torch.abs(target_angles + torch.pi/2) < torch.pi/4] = 3  # 左方
-            
-            # 选择相反方向
-            opposite_directions = (target_direction_idx + 2) % 4
-            
-            # 随机选择是否使用相反方向（50%概率）
-            use_opposite = torch.rand(env_ids.size(0), device=self.cfg.device) > 0.5
-            mask_indices = torch.where(use_opposite, opposite_directions, 
-                                       torch.randint(0, 4, (env_ids.size(0),), device=self.cfg.device))
+            target_idx = self._target_mask_idx[env_ids]  
+            rand_offset = torch.randint(1, 4, (env_ids.size(0),), device=self.cfg.device)  
+            mask_indices = (target_idx + rand_offset) % 4
             
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
@@ -1060,37 +1038,6 @@ class NavigationEnv(IsaacEnv):
             # 应用掩码和偏移
             pos = pos * selected_masks + selected_shifts
             
-            # 确保起始位置和目标位置有最小距离（至少5米）
-            min_distance = 5.0
-            distance_to_target = (pos[:, 0, :2] - self.target_pos[env_ids, 0, :2]).norm(dim=-1)
-            
-            # 如果距离太近，重新生成位置
-            retry_count = 0
-            max_retries = 10
-            while (distance_to_target < min_distance).any() and retry_count < max_retries:
-                too_close_mask = distance_to_target < min_distance
-                num_too_close = too_close_mask.sum().item()
-                
-                if num_too_close > 0:
-                    # 重新生成位置
-                    new_pos = 45.0 * torch.rand(
-                        num_too_close, 1, 3, dtype=torch.float, device=self.cfg.device
-                    ) + (-22.5)
-                    new_pos[:, 0, 2] = 0.4
-                    
-                    # 随机选择新方向
-                    new_mask_indices = torch.randint(0, 4, (num_too_close,), device=self.cfg.device)
-                    new_masks = masks[new_mask_indices].unsqueeze(1)
-                    new_shifts = shifts[new_mask_indices].unsqueeze(1)
-                    new_pos = new_pos * new_masks + new_shifts
-                    
-                    # 更新位置
-                    pos[too_close_mask] = new_pos
-                    
-                    # 重新计算距离
-                    distance_to_target = (pos[:, 0, :2] - self.target_pos[env_ids, 0, :2]).norm(dim=-1)
-                
-                retry_count += 1
         else:
             # 评估模式：固定起始位置
             pos = torch.zeros(len(env_ids), 1, 3, device=self.cfg.device)
@@ -1133,9 +1080,7 @@ class NavigationEnv(IsaacEnv):
 
         参数：
         ----------
-        tensordict : TensorDictBase
-            包含动作数据的张量字典
-            - tensordict[("agents", "action")]: 机器人动作 [num_envs, action_dim]
+            tensordict[("agents", "action")]: 机器人动作 [num_envs, action_dim]
         """
         actions = tensordict[("agents", "action")]
         emergency_stop = tensordict.get(("agents", "emergency_stop"), None)
@@ -1198,7 +1143,7 @@ class NavigationEnv(IsaacEnv):
         self.root_state = self.go2.get_state(env_frame=False)
 
         # 保存前13维用于额外信息（供控制器使用）
-        self.info["robot_state"][:] = self.root_state[..., :13]
+        self.info["robot_state_info"][:] = self.root_state[..., :13]
 
         # =========================================================================
         # 步骤2：计算 LiDAR 观测
@@ -1430,12 +1375,11 @@ class NavigationEnv(IsaacEnv):
         # a. 静态障碍物碰撞检测
         # LiDAR读数接近最大值表示有障碍物非常近
         static_collision = einops.reduce(self.lidar_scan, "n 1 w h -> n 1", "max") > (
-            self.lidar_range - 0.3
-        )  # 0.3米碰撞半径
+            self.lidar_range - 0.25
+        )  # 0.25米碰撞半径
 
         # b. 组合碰撞检测结果
         # dynamic_collision 已在动态障碍物处理部分定义
-        # 确保 dynamic_collision 的形状正确
         if dynamic_collision.dim() == 1:
             dynamic_collision = dynamic_collision.unsqueeze(
                 -1
