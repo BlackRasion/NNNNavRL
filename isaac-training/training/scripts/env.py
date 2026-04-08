@@ -843,12 +843,16 @@ class NavigationEnv(IsaacEnv):
                     "reach_goal": UnboundedContinuousTensorSpec((1,)),  # 是否到达目标
                     "collision": UnboundedContinuousTensorSpec((1,)),  # 是否发生碰撞
                     "truncated": UnboundedContinuousTensorSpec((1,)),  # 是否截断
+                    "reward_distance": UnboundedContinuousTensorSpec((1,)),
                     "reward_progress": UnboundedContinuousTensorSpec((1,)),
                     "reward_velocity": UnboundedContinuousTensorSpec((1,)),
+                    "reward_heading": UnboundedContinuousTensorSpec((1,)),
                     "reward_safety_static": UnboundedContinuousTensorSpec((1,)),
                     "reward_safety_dynamic": UnboundedContinuousTensorSpec((1,)),
                     "reward_angular_penalty": UnboundedContinuousTensorSpec((1,)),
-                    "reward_heading": UnboundedContinuousTensorSpec((1,)),
+                    "reward_collision": UnboundedContinuousTensorSpec((1,)),
+                    "reward_goal": UnboundedContinuousTensorSpec((1,)),
+                    "reward_survival": UnboundedContinuousTensorSpec((1,)),
                 }
             )
             .expand(self.num_envs)
@@ -883,18 +887,16 @@ class NavigationEnv(IsaacEnv):
                 "reach_goal": torch.zeros(self.num_envs, 1, device=self.cfg.device),
                 "collision": torch.zeros(self.num_envs, 1, device=self.cfg.device),
                 "truncated": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_distance": torch.zeros(self.num_envs, 1, device=self.cfg.device),
                 "reward_progress": torch.zeros(self.num_envs, 1, device=self.cfg.device),
                 "reward_velocity": torch.zeros(self.num_envs, 1, device=self.cfg.device),
-                "reward_safety_static": torch.zeros(
-                    self.num_envs, 1, device=self.cfg.device
-                ),
-                "reward_safety_dynamic": torch.zeros(
-                    self.num_envs, 1, device=self.cfg.device
-                ),
-                "reward_angular_penalty": torch.zeros(
-                    self.num_envs, 1, device=self.cfg.device
-                ),
-                "reward_heading": torch.zeros(self.num_envs, 1, device=self.cfg.device), 
+                "reward_heading": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_safety_static": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_safety_dynamic": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_angular_penalty": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_collision": torch.zeros(self.num_envs, 1, device=self.cfg.device), 
+                "reward_goal": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_survival": torch.zeros(self.num_envs, 1, device=self.cfg.device),
             },
             batch_size=[self.num_envs],
                 device=self.cfg.device,
@@ -1069,6 +1071,12 @@ class NavigationEnv(IsaacEnv):
         # 重置速度记录
         self.prev_robot_vel_w[env_ids] = 0.0
 
+        # 重置进度奖励的距离记录（避免新 episode 第一步使用旧值）
+        if hasattr(self, "prev_distance"):
+            # 计算初始距离并重置
+            initial_distance = (self.target_pos[env_ids, :, :2] - pos[:, :, :2]).norm(dim=-1, keepdim=True)
+            self.prev_distance[env_ids] = initial_distance
+
         # 重置统计信息
         self.stats[env_ids] = 0.0
 
@@ -1098,6 +1106,234 @@ class NavigationEnv(IsaacEnv):
 
         # 更新 LiDAR 传感器状态
         self.lidar.update(self.dt)
+
+    def _compute_reward(
+        self,
+        distance_2d: torch.Tensor,
+        rpos: torch.Tensor,
+        vel_w: torch.Tensor,
+        target_angle_relative: torch.Tensor,
+        angular_vel_yaw: torch.Tensor,
+        collision: torch.Tensor,
+        reach_goal: torch.Tensor,
+        closest_dyn_obs_distance_reward: torch.Tensor = None,
+    ) -> Tuple[torch.Tensor, dict]:
+        """
+        计算奖励函数（优化版本）
+
+        奖励设计原则：
+        1. 奖励塑形：提供密集的中间奖励，引导策略学习
+        2. 尺度平衡：所有奖励分量在相似的数量级（±1到±10）
+        3. 避免冲突：确保各奖励分量不相互矛盾
+
+        参数：
+        ----------
+        distance_2d : torch.Tensor
+            相对水平距离 [num_envs, 1]
+        rpos : torch.Tensor
+            相对位置向量 [num_envs, 3]
+        vel_w : torch.Tensor
+            机器人世界坐标速度 [num_envs, 3]
+        target_angle_relative : torch.Tensor
+            目标相对角度 [num_envs, 1]
+        angular_vel_yaw : torch.Tensor
+            yaw角速度 [num_envs, 1]
+        collision : torch.Tensor
+            碰撞状态 [num_envs, 1]
+        reach_goal : torch.Tensor
+            是否到达目标 [num_envs]
+        closest_dyn_obs_distance_reward : torch.Tensor, optional
+            动态障碍物距离 [num_envs, N]
+
+        返回：
+        ----------
+        Tuple[torch.Tensor, dict]
+            - reward: 总奖励 [num_envs, 1]
+            - reward_dict: 各奖励分量的字典
+        """
+        # =========================================================================
+        # 1. 目标导向奖励（核心） reward_distance
+        # =========================================================================
+        # a. 距离惩罚：使用对数形式，避免尺度问题
+        # 惩罚范围：[-7.9, -0.4]，距离越近惩罚越小
+        reward_distance = -torch.log(distance_2d.clamp(0.5, 50.0) + 0.7) * 2.0                                      
+
+        # b. 进度奖励：距离减小的奖励（塑形奖励）
+        # 奖励范围：[0.0, 9.0]
+        if not hasattr(self, "prev_distance"):
+            self.prev_distance = distance_2d.clone()
+
+        distance_improved = (self.prev_distance - distance_2d).squeeze(-1)
+        self.prev_distance = distance_2d.clone()
+
+        # 只奖励距离减小，不惩罚距离增加（允许绕行）
+        reward_progress = torch.clamp(distance_improved, min=0.0) * 4.0
+
+        # =========================================================================
+        # 2. 运动效率奖励
+        # =========================================================================
+        # a. 朝向目标移动的速度奖励
+        # 奖励范围：[0.0, 2.25]
+        # 归一化目标方向向量
+        target_dir_norm = rpos[..., :2].norm(dim=-1, keepdim=True).clamp(1e-6)
+        target_dir_normalized = rpos[..., :2] / target_dir_norm  # [num_envs, 1, 2]
+
+        # 速度在目标方向的投影（世界坐标系）
+        vel_toward_goal = (vel_w[..., :2] * target_dir_normalized).sum(-1).squeeze(-1)
+
+        # 速度奖励：鼓励朝向目标移动
+        reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * 1.0
+
+        # b. 朝向奖励：鼓励朝向目标（与速度奖励协同）
+        # 奖励范围：[0.0, 0.5]
+        # 使用平滑的余弦函数，避免在目标附近震荡
+        heading_cos = torch.cos(target_angle_relative.squeeze(-1))
+        reward_heading = torch.clamp(heading_cos, min=0.0) * 0.5
+
+        # =========================================================================
+        # 3. 安全奖励（关键）
+        # =========================================================================
+        # a. 静态障碍物安全惩罚
+        # self.lidar_scan 值越大表示障碍物越近
+        max_lidar_value = self.lidar_scan.max(dim=-1)[0].max(dim=-1)[0]  # [num_envs]
+
+        # 将 lidar 值转换为实际距离
+        # lidar_value = lidar_range - actual_distance
+        # actual_distance = lidar_range - lidar_value
+        min_lidar_dist = self.lidar_range - max_lidar_value
+
+        # 使用平滑分段函数：在 [0.5, 0.7] 区间对线性段与指数段做 smoothstep 混合，
+        static_linear = -(1.5 - min_lidar_dist)
+        # 让指数分支在 0.6m 与线性分支对齐: -A*exp(-0.6/0.3) = -0.9
+        static_exp_scale = float(0.9 * np.exp(0.6 / 0.3))
+        static_exp = -static_exp_scale * torch.exp(-min_lidar_dist / 0.3)
+
+        static_blend_alpha = ((min_lidar_dist - 0.5) / 0.2).clamp(0.0, 1.0)
+        static_blend_alpha = (
+            static_blend_alpha * static_blend_alpha * (3.0 - 2.0 * static_blend_alpha)
+        )
+        static_mixed = (
+            (1.0 - static_blend_alpha) * static_exp
+            + static_blend_alpha * static_linear
+        )
+        # 范围 [-2.6, -0.9] [-0.9 0.0]
+        safety_penalty_static = torch.where(
+            min_lidar_dist > 1.5,
+            torch.zeros_like(min_lidar_dist),
+            torch.where(
+                min_lidar_dist < 0.5,
+                static_exp,
+                torch.where(min_lidar_dist > 0.7, static_linear, static_mixed),
+            ),
+        )
+
+        # b. 动态障碍物安全惩罚
+        if self.cfg.env_dyn.num_obstacles != 0 and closest_dyn_obs_distance_reward is not None:
+            # 使用与静态障碍物相同的分段函数
+            min_dyn_obs_dist = closest_dyn_obs_distance_reward.min(dim=-1)[0]
+
+            dynamic_linear = -(1.5 - min_dyn_obs_dist)
+            dynamic_exp_scale = float(0.9 * np.exp(0.6 / 0.3))
+            dynamic_exp = -dynamic_exp_scale * torch.exp(-min_dyn_obs_dist / 0.3)
+
+            dynamic_blend_alpha = ((min_dyn_obs_dist - 0.5) / 0.2).clamp(0.0, 1.0)
+            dynamic_blend_alpha = (
+                dynamic_blend_alpha
+                * dynamic_blend_alpha
+                * (3.0 - 2.0 * dynamic_blend_alpha)
+            )
+            dynamic_mixed = (
+                (1.0 - dynamic_blend_alpha) * dynamic_exp
+                + dynamic_blend_alpha * dynamic_linear
+            )
+
+            safety_penalty_dynamic = torch.where(
+                min_dyn_obs_dist > 1.5,
+                torch.zeros_like(min_dyn_obs_dist),
+                torch.where(
+                    min_dyn_obs_dist < 0.5,
+                    dynamic_exp,
+                    torch.where(min_dyn_obs_dist > 0.7, dynamic_linear, dynamic_mixed),
+                ),
+            )
+        else:
+            safety_penalty_dynamic = torch.zeros_like(safety_penalty_static)
+
+        # =========================================================================
+        # 4. 平滑性奖励
+        # =========================================================================
+        # 惩罚范围：[-0.57, 0.0]
+        angular_vel_abs = torch.abs(angular_vel_yaw.squeeze(-1))
+        angular_penalty = torch.where(
+            angular_vel_abs > 1.0,
+            - (angular_vel_abs - 1.0),  # 只惩罚超过阈值（>1.0 rad/s）的部分
+            torch.zeros_like(angular_vel_abs),
+        )
+
+        # =========================================================================
+        # 5. 终止奖励（稀疏奖励）
+        # =========================================================================
+        # a. 碰撞惩罚：大幅惩罚
+        collision_penalty = collision.float().squeeze(-1) * (-30.0)
+
+        # b. 到达目标奖励：大幅奖励
+        goal_reward = reach_goal.float() * 25.0
+
+        # c. 生存奖励：鼓励每步安全存活（未碰撞且未到达）
+        survival_reward = (
+            (~collision.squeeze(-1).bool()) & (~reach_goal.bool())
+        ).float() * 0.3
+
+        # =========================================================================
+        # 6. 组合奖励
+        # =========================================================================
+        # 确保所有奖励分量形状一致
+        reward_distance_2d = reward_distance if reward_distance.dim() == 2 else reward_distance.unsqueeze(-1)
+        reward_progress_2d = reward_progress if reward_progress.dim() == 2 else reward_progress.unsqueeze(-1)
+        reward_velocity_2d = reward_velocity.unsqueeze(-1) if reward_velocity.dim() == 1 else reward_velocity
+        reward_heading_2d = reward_heading.unsqueeze(-1) if reward_heading.dim() == 1 else reward_heading
+        safety_penalty_static_2d = safety_penalty_static.unsqueeze(-1) if safety_penalty_static.dim() == 1 else safety_penalty_static
+        safety_penalty_dynamic_2d = safety_penalty_dynamic.unsqueeze(-1) if safety_penalty_dynamic.dim() == 1 else safety_penalty_dynamic
+        angular_penalty_2d = angular_penalty.unsqueeze(-1) if angular_penalty.dim() == 1 else angular_penalty
+        collision_penalty_2d = collision_penalty.unsqueeze(-1) if collision_penalty.dim() == 1 else collision_penalty
+        goal_reward_2d = goal_reward.unsqueeze(-1) if goal_reward.dim() == 1 else goal_reward
+        survival_reward_2d = survival_reward.unsqueeze(-1) if survival_reward.dim() == 1 else survival_reward
+
+        # 组合奖励（固定权重）
+        reward = (
+            reward_distance_2d * 1.0  # 距离奖励
+            + reward_progress_2d * 1.0  # 进度奖励
+            + reward_velocity_2d * 1.0  # 速度奖励
+            + reward_heading_2d * 0.5  # 朝向奖励
+            + safety_penalty_static_2d * 2.0  # 安全惩罚
+            + safety_penalty_dynamic_2d * 2.0  # 安全惩罚
+            - angular_penalty_2d  # 平滑性惩罚
+            + collision_penalty_2d  # 碰撞惩罚
+            + goal_reward_2d  # 目标奖励
+            + survival_reward_2d  # 生存奖励
+        )
+
+        # 确保奖励的形状是 (num_envs, 1)
+        assert reward.shape == (
+            self.num_envs,
+            1,
+        ), f"Reward shape mismatch: {reward.shape} vs {(self.num_envs, 1)}"
+
+        # 返回奖励和各分量
+        reward_dict = {
+            "reward_distance": reward_distance_2d,
+            "reward_progress": reward_progress_2d,
+            "reward_velocity": reward_velocity_2d,
+            "reward_heading": reward_heading_2d,
+            "reward_safety_static": safety_penalty_static_2d,
+            "reward_safety_dynamic": safety_penalty_dynamic_2d,
+            "reward_angular_penalty": angular_penalty_2d,
+            "reward_collision": collision_penalty_2d,
+            "reward_goal": goal_reward_2d,
+            "reward_survival": survival_reward_2d,
+        }
+
+        return reward, reward_dict
 
     def _compute_state_and_obs(self):
         """
@@ -1392,170 +1628,45 @@ class NavigationEnv(IsaacEnv):
         reach_goal = (distance_2d.squeeze(-1) < 0.5).squeeze(-1)  # 形状: (num_envs,)
 
         # =========================================================================
-        # 步骤7：计算奖励（重新设计）
+        # 步骤7：计算奖励
         # =========================================================================
-        # 奖励设计原则：
-        # 1. 明确的目标导向：到达目标给予大奖励
-        # 2. 合理的避障激励：距离障碍物越近惩罚越大
-        # 3. 平滑的运动鼓励：避免剧烈的动作变化
-
-        # a. 进度奖励：距离减小的奖励
-        # 初始化上一时刻距离
-        if not hasattr(self, "prev_distance"):
-            self.prev_distance = distance_2d.clone()
-
-        # 计算距离改善（优化：只计算水平距离改善）
-        distance_improved = (self.prev_distance - distance_2d).squeeze(-1)
-        self.prev_distance = distance_2d.clone()
-
-        # 进度奖励：距离减小给予奖励，距离增加给予惩罚
-        reward_progress = distance_improved * 10.0  # 增加权重
-
-        # b. 速度奖励：使用机器人坐标系（关键改进）
-        # 计算机器人前进方向（机器人坐标系 x 轴在世界坐标系中的表示）
-        # 注意：forward_dir_world 的形状需要与 self.go2.vel_w 的形状匹配
-        # self.go2.vel_w 的形状是 (num_envs, 1, 6)，所以 forward_dir_world 应该是 (num_envs, 1, 3)
-
-        # robot_yaw 的形状是 (num_envs, 1)，需要先 squeeze 再处理
-        robot_yaw_squeezed = robot_yaw.squeeze(-1)  # 形状: (num_envs,)
-
-        forward_dir_world = torch.stack(
-            [
-                torch.cos(robot_yaw_squeezed),
-                torch.sin(robot_yaw_squeezed),
-                torch.zeros_like(robot_yaw_squeezed),
-            ],
-            dim=-1,
-        ).unsqueeze(
-            -2
-        )  # 形状: (num_envs, 1, 3)
-
-        # 速度在前进方向上的投影
-        # self.go2.vel_w[..., :3] 的形状是 (num_envs, 1, 3)
-        # forward_dir_world 的形状是 (num_envs, 1, 3)
-        forward_vel = (
-            (self.go2.vel_w[..., :3] * forward_dir_world).sum(-1).squeeze(-1)
-        )  # 形状: (num_envs,)
-
-        # 目标在机器人前方方向的投影（余弦相似度）
-        target_in_front = torch.cos(target_angle_relative).squeeze(
-            -1
-        )  # 形状: (num_envs,)
-
-        # 速度奖励：前进速度 × 目标在前方的程度
-        # 只有当目标在前方且向前移动时才给予奖励
-        reward_vel = forward_vel * target_in_front.clamp(0, 1) * 2.0
-
-        # c. 静态障碍物安全奖励：指数衰减（关键改进）
-        min_lidar_dist = (
-            (self.lidar_range - self.lidar_scan).min(dim=-1)[0].min(dim=-1)[0]
-        )
-
-        # 使用指数衰减，距离越近惩罚越大
-        # 距离 4m → 惩罚 -0.0003
-        # 距离 2m → 惩罚 -0.018
-        # 距离 1m → 惩罚 -0.135
-        # 距离 0.5m → 惩罚 -0.541
-        reward_safety_static = -torch.exp(-min_lidar_dist / 0.5) * 2.0
-
-        # d. 动态障碍物安全奖励
+        # 调用奖励计算函数
         if self.cfg.env_dyn.num_obstacles != 0:
-            # 使用平方根而非对数，避免梯度问题
-            # 距离越近，惩罚越大
-            dist_to_obstacle = closest_dyn_obs_distance_reward.clamp(
-                0.1, self.lidar_range
-            )
-            reward_safety_dynamic = (
-                -torch.sqrt(self.lidar_range - dist_to_obstacle) * 3.0
-            )
-            reward_safety_dynamic = reward_safety_dynamic.mean(dim=-1).unsqueeze(-1)
+            self.reward, reward_dict = self._compute_reward(
+                distance_2d=distance_2d,
+                rpos=rpos,
+                vel_w=vel_w,
+                target_angle_relative=target_angle_relative,
+                angular_vel_yaw=angular_vel_yaw,
+                collision=collision,
+                reach_goal=reach_goal,
+                closest_dyn_obs_distance_reward=closest_dyn_obs_distance_reward,
 
-        # e. 平滑性惩罚：yaw角速度惩罚（避免剧烈旋转）
-        angular_vel_penalty = torch.abs(angular_vel_yaw) * 0.5  # 只惩罚yaw角速度
-
-        # f. 碰撞惩罚：大幅增加（关键改进）
-        # 确保形状一致：(num_envs, 1)
-        collision_penalty = collision.float() * (-200.0)  # 形状: (num_envs, 1)
-
-        # g. 到达目标奖励：大幅增加（关键改进）
-        # 确保形状一致：(num_envs, 1)
-        goal_reward = reach_goal.unsqueeze(-1).float() * 200.0  # 形状: (num_envs, 1)
-
-        # h. 朝向奖励：鼓励朝向目标（新增）
-        # 目标相对角度越小（越朝向目标），奖励越大
-        # 确保形状一致：(num_envs, 1)
-        reward_heading = (
-            torch.cos(target_angle_relative).squeeze(-1).unsqueeze(-1) * 0.5
-        )  # 形状: (num_envs, 1)
-
-        # 最终奖励组合（移除生存奖励）
-        # 所有奖励分量形状统一为 (num_envs, 1)
-        if self.cfg.env_dyn.num_obstacles != 0:
-            reward_progress_2d = (
-                reward_progress
-                if reward_progress.dim() == 2
-                else reward_progress.unsqueeze(-1)
-            )
-            reward_vel_2d = (
-                reward_vel.unsqueeze(-1) if reward_vel.dim() == 1 else reward_vel
-            )
-            reward_safety_static_2d = (
-                reward_safety_static
-                if reward_safety_static.dim() == 2
-                else reward_safety_static.unsqueeze(-1)
-            )
-            angular_vel_penalty_2d = (
-                angular_vel_penalty
-                if angular_vel_penalty.dim() == 2
-                else angular_vel_penalty.unsqueeze(-1)
-            )
-
-            self.reward = (
-                reward_progress_2d * 1.0  # 进度奖励（距离改善）
-                + reward_vel_2d * 1.0  # 速度奖励
-                + reward_safety_static_2d * 1.0  # 静态障碍物安全
-                + reward_safety_dynamic * 1.0  # 动态障碍物安全
-                + -angular_vel_penalty_2d  # 角速度惩罚
-                + collision_penalty  # 碰撞惩罚
-                + goal_reward  # 到达目标奖励
-                + reward_heading  # 朝向奖励
             )
         else:
-            reward_progress_2d = (
-                reward_progress
-                if reward_progress.dim() == 2
-                else reward_progress.unsqueeze(-1)
-            )
-            reward_vel_2d = (
-                reward_vel.unsqueeze(-1) if reward_vel.dim() == 1 else reward_vel
-            )
-            reward_safety_static_2d = (
-                reward_safety_static
-                if reward_safety_static.dim() == 2
-                else reward_safety_static.unsqueeze(-1)
-            )
-            angular_vel_penalty_2d = (
-                angular_vel_penalty
-                if angular_vel_penalty.dim() == 2
-                else angular_vel_penalty.unsqueeze(-1)
-            )
-            reward_safety_dynamic = torch.zeros_like(reward_safety_static_2d)
-
-            self.reward = (
-                reward_progress_2d * 1.0
-                + reward_vel_2d * 1.0
-                + reward_safety_static_2d * 1.0
-                + -angular_vel_penalty_2d
-                + collision_penalty
-                + goal_reward
-                + reward_heading
+            self.reward, reward_dict = self._compute_reward(
+                distance_2d=distance_2d,
+                rpos=rpos,
+                vel_w=vel_w,
+                target_angle_relative=target_angle_relative,
+                angular_vel_yaw=angular_vel_yaw,
+                collision=collision,
+                reach_goal=reach_goal,
             )
 
-        # 确保奖励的形状是 (num_envs, 1)
-        assert self.reward.shape == (
-            self.num_envs,
-            1,
-        ), f"Reward shape mismatch: {self.reward.shape} vs {(self.num_envs, 1)}"
+        # 提取各奖励分量用于统计
+        reward_distance_2d = reward_dict["reward_distance"]
+        reward_progress_2d = reward_dict["reward_progress"]
+        reward_vel_2d = reward_dict["reward_velocity"]
+        reward_heading = reward_dict["reward_heading"]
+        reward_safety_static_2d = reward_dict["reward_safety_static"]
+        reward_safety_dynamic = reward_dict["reward_safety_dynamic"]
+        angular_vel_penalty_2d = reward_dict["reward_angular_penalty"]
+        collision_penalty = reward_dict["reward_collision"]
+        reward_goal = reward_dict["reward_goal"]
+        reward_survival = reward_dict["reward_survival"]
+
+
 
         # =========================================================================
         # 步骤8：判断终止条件
@@ -1577,12 +1688,17 @@ class NavigationEnv(IsaacEnv):
         self.stats["reach_goal"] = reach_goal.float()  # 是否到达目标
         self.stats["collision"] = collision.float()  # 是否碰撞
         self.stats["truncated"] = self.truncated.float()  # 是否截断
+        self.stats["reward_distance"] = reward_distance_2d
         self.stats["reward_progress"] = reward_progress_2d
         self.stats["reward_velocity"] = reward_vel_2d
+        self.stats["reward_heading"] = reward_heading
         self.stats["reward_safety_static"] = reward_safety_static_2d
         self.stats["reward_safety_dynamic"] = reward_safety_dynamic
         self.stats["reward_angular_penalty"] = angular_vel_penalty_2d
-        self.stats["reward_heading"] = reward_heading
+        self.stats["reward_collision"] = collision_penalty
+        self.stats["reward_goal"] = reward_goal
+        self.stats["reward_survival"] = reward_survival
+
 
         # 返回观测张量字典
         return TensorDict(

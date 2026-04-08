@@ -498,8 +498,6 @@ class Go2Robot(RobotBase):
 
         返回:
             velocities: 速度张量 [vx, vy, vz, wx, wy, wz]，形状为 [..., 6]
-                       - vx, vy, vz: 线速度（单位：m/s）
-                       - wx, wy, wz: 角速度（单位：rad/s）
 
         使用示例:
             # 获取速度引用（不复制）
