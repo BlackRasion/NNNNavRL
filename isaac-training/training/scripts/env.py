@@ -434,11 +434,14 @@ class NavigationEnv(IsaacEnv):
             target_pos = target_pos * selected_masks + selected_shifts
             # 设置目标位置
             self.target_pos[env_ids] = target_pos
-        else:
+        else:  
             # 评估模式：固定目标位置（所有环境在一条线上）
-            self.target_pos[:, 0, 0] = torch.linspace(-0.5, 0.5, self.num_envs) * 32.
-            self.target_pos[:, 0, 1] = -24.
-            self.target_pos[:, 0, 2] = 2.            
+            # 先构建全局固定评估轨迹，再按 env_ids 取子集
+            env_ids = env_ids.to(device=self.cfg.device, dtype=torch.long)
+            eval_x = torch.linspace(-0.5, 0.5, self.num_envs, device=self.cfg.device) * 32  # x坐标：从-0.5到0.5均匀分布，缩放22.5倍
+            self.target_pos[env_ids, 0, 0] = eval_x[env_ids]
+            self.target_pos[env_ids, 0, 1] = -24.  # y坐标：固定在-24米
+            self.target_pos[env_ids, 0, 2] = 2.
 
     def _reset_idx(self, env_ids: torch.Tensor):
         """
