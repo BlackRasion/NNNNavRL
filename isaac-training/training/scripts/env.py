@@ -1329,7 +1329,7 @@ class NavigationEnv(IsaacEnv):
             + safety_penalty_dynamic_2d * 5.0  # 安全惩罚
             + angular_penalty_2d  # 平滑性惩罚
             + collision_penalty_2d  # 碰撞惩罚
-            + reward_goal  # 目标奖励
+            + goal_reward_2d  # 目标奖励
             + survival_reward_2d  # 生存奖励
         )
 
@@ -1349,7 +1349,7 @@ class NavigationEnv(IsaacEnv):
             "reward_safety_dynamic": safety_penalty_dynamic_2d,
             "reward_angular_penalty": angular_penalty_2d,
             "reward_collision": collision_penalty_2d,
-            "reward_goal": reward_goal,
+            "reward_goal": goal_reward_2d,
             "reward_survival": survival_reward_2d,
         }
 
