@@ -854,7 +854,6 @@ class NavigationEnv(IsaacEnv):
                     "reward_angular_penalty": UnboundedContinuousTensorSpec((1,)),
                     "reward_collision": UnboundedContinuousTensorSpec((1,)),
                     "reward_goal": UnboundedContinuousTensorSpec((1,)),
-                    "reward_survival": UnboundedContinuousTensorSpec((1,)),
                 }
             )
             .expand(self.num_envs)
@@ -898,7 +897,6 @@ class NavigationEnv(IsaacEnv):
                 "reward_angular_penalty": torch.zeros(self.num_envs, 1, device=self.cfg.device),
                 "reward_collision": torch.zeros(self.num_envs, 1, device=self.cfg.device), 
                 "reward_goal": torch.zeros(self.num_envs, 1, device=self.cfg.device),
-                "reward_survival": torch.zeros(self.num_envs, 1, device=self.cfg.device),
             },
             batch_size=[self.num_envs],
                 device=self.cfg.device,
@@ -1087,9 +1085,6 @@ class NavigationEnv(IsaacEnv):
     def _pre_sim_step(self, tensordict: TensorDictBase):
         """
         仿真步前处理：应用动作到机器人
-
-        在物理引擎推进仿真之前调用，将策略网络输出的动作应用到机器人。
-
         参数：
         ----------
             tensordict[("agents", "action")]: 机器人动作 [num_envs, action_dim]
@@ -1173,29 +1168,9 @@ class NavigationEnv(IsaacEnv):
         # 只奖励距离减小，不惩罚距离增加（允许绕行）
         reward_progress = torch.clamp(distance_improved, min=0.0) * 6.0
 
-        # =========================================================================
-        # 2. 运动效率奖励
-        # =========================================================================
-        # a. 朝向目标移动的速度奖励
-        # 奖励范围：[0.0, 2.25]
-        # 归一化目标方向向量
-        target_dir_norm = rpos[..., :2].norm(dim=-1, keepdim=True).clamp(1e-6)
-        target_dir_normalized = rpos[..., :2] / target_dir_norm  # [num_envs, 1, 2]
-
-        # 速度在目标方向的投影（世界坐标系）
-        vel_toward_goal = (vel_w[..., :2] * target_dir_normalized).sum(-1).squeeze(-1)
-
-        # 速度奖励：鼓励朝向目标移动
-        reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * 1.0
-
-        # b. 朝向奖励：鼓励朝向目标（与速度奖励协同）
-        # 奖励范围：[0.0, 0.5]
-        # 使用平滑的余弦函数，避免在目标附近震荡
-        heading_cos = torch.cos(target_angle_relative.squeeze(-1))
-        reward_heading = torch.clamp(heading_cos, min=0.0) * 0.5
 
         # =========================================================================
-        # 3. 安全奖励（关键）
+        # 2. 安全奖励（关键）
         # =========================================================================
         # a. 静态障碍物安全惩罚
         # self.lidar_scan 值越大表示障碍物越近
@@ -1261,21 +1236,40 @@ class NavigationEnv(IsaacEnv):
                 ),
             )
         else:
+            # 未启用动态障碍物时，使用 LiDAR 量程作为“远离动态障碍物”的默认距离
+            min_dyn_obs_dist = torch.full_like(min_lidar_dist, self.lidar_range)
             safety_penalty_dynamic = torch.zeros_like(safety_penalty_static)
 
-        # c. 生存奖励：鼓励每步安全存活（未碰撞且未到达）
-        survival_reward = (
-            (~collision.squeeze(-1).bool()) & (~reach_goal.bool())
-        ).float() * 1.0
+        # =========================================================================
+        # 3. 运动效率奖励
+        # =========================================================================
+        # a. 朝向目标移动的速度奖励
+        # 奖励范围：[0.0, 2.25]
+        # 归一化目标方向向量
+        target_dir_norm = rpos[..., :2].norm(dim=-1, keepdim=True).clamp(1e-6)
+        target_dir_normalized = rpos[..., :2] / target_dir_norm  # [num_envs, 1, 2]
+
+        # 速度在目标方向的投影（世界坐标系）
+        vel_toward_goal = (vel_w[..., :2] * target_dir_normalized).sum(-1).squeeze(-1)
+
+        # 速度奖励：鼓励朝向目标移动，并在静/动态任一近障时抑制高速
+        min_obs_dist = torch.minimum(min_lidar_dist, min_dyn_obs_dist)
+        near_obs_speed_gate = ((min_obs_dist - 0.6) / 1.0).clamp(0.0, 1.0)
+        reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * near_obs_speed_gate
+
+        # b. 朝向奖励：鼓励朝向目标（与速度奖励协同）
+        # 奖励范围：[0.0, 0.5]
+        # 使用平滑的余弦函数，避免在目标附近震荡
+        heading_cos = torch.cos(target_angle_relative.squeeze(-1))
+        reward_heading = torch.clamp(heading_cos, min=0.0) * 0.5
 
         # =========================================================================
         # 4. 平滑性奖励
         # =========================================================================
-        # 惩罚范围：[-0.57, 0.0]
         angular_vel_abs = torch.abs(angular_vel_yaw.squeeze(-1))
         angular_penalty = torch.where(
-            angular_vel_abs > 1.0,
-            - (angular_vel_abs - 1.0),  # 只惩罚超过阈值（>1.0 rad/s）的部分
+            angular_vel_abs > 0.7,
+            - (angular_vel_abs - 0.7),  # 只惩罚超过阈值（>0.7 rad/s）的部分
             torch.zeros_like(angular_vel_abs),
         )
 
@@ -1283,7 +1277,7 @@ class NavigationEnv(IsaacEnv):
         # 5. 终止奖励（稀疏奖励）
         # =========================================================================
         # a. 碰撞惩罚：大幅惩罚
-        collision_penalty = collision.float().squeeze(-1) * (-130.0)
+        collision_penalty = collision.float().squeeze(-1) * (-150.0)
 
         # b. 到达目标奖励：大幅奖励
         goal_reward = reach_goal.float() * 120.0
@@ -1317,20 +1311,18 @@ class NavigationEnv(IsaacEnv):
         angular_penalty_2d = _as_env_column(angular_penalty, "angular_penalty")
         collision_penalty_2d = _as_env_column(collision_penalty, "collision_penalty")
         goal_reward_2d = _as_env_column(goal_reward, "goal_reward")
-        survival_reward_2d = _as_env_column(survival_reward, "survival_reward")
 
         # 组合奖励（固定权重）
         reward = (
             reward_distance_2d * 0.5  # 距离奖励
             + reward_progress_2d * 2.0  # 进度奖励
-            + reward_velocity_2d * 1.5  # 速度奖励
+            + reward_velocity_2d * 1.2  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
             + safety_penalty_static_2d * 4.0  # 安全惩罚
             + safety_penalty_dynamic_2d * 4.0  # 安全惩罚
-            + angular_penalty_2d  # 平滑性惩罚
-            + collision_penalty_2d  # 碰撞惩罚
-            + goal_reward_2d  # 目标奖励
-            # survival_reward_2d * 0.1 # 生存奖励
+            + angular_penalty_2d * 1.0 # 平滑性惩罚
+            + collision_penalty_2d  * 1.0# 碰撞惩罚
+            + goal_reward_2d * 1.0  # 目标奖励
         )
 
         # 确保奖励的形状是 (num_envs, 1)
@@ -1350,7 +1342,6 @@ class NavigationEnv(IsaacEnv):
             "reward_angular_penalty": angular_penalty_2d,
             "reward_collision": collision_penalty_2d,
             "reward_goal": goal_reward_2d,
-            "reward_survival": survival_reward_2d,
         }
 
         return reward, reward_dict
@@ -1684,7 +1675,6 @@ class NavigationEnv(IsaacEnv):
         angular_vel_penalty_2d = reward_dict["reward_angular_penalty"]
         collision_penalty = reward_dict["reward_collision"]
         reward_goal = reward_dict["reward_goal"]
-        reward_survival = reward_dict["reward_survival"]
 
 
 
@@ -1717,7 +1707,6 @@ class NavigationEnv(IsaacEnv):
         self.stats["reward_angular_penalty"] = angular_vel_penalty_2d
         self.stats["reward_collision"] = collision_penalty
         self.stats["reward_goal"] = reward_goal
-        self.stats["reward_survival"] = reward_survival
 
 
         # 返回观测张量字典
