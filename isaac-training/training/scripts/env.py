@@ -147,9 +147,9 @@ class NavigationEnv(IsaacEnv):
 
     def _design_scene(self):
         """
-        设计仿真场景
+        设计仿真训练场景
 
-        创建完整的仿真环境，包括：
+        创建完整的训练环境，包括：
         1. 地面移动机器人
         2. 光照系统
         3. 地平面
@@ -1159,8 +1159,8 @@ class NavigationEnv(IsaacEnv):
         # 1. 目标导向奖励（核心） reward_distance
         # =========================================================================
         # a. 距离奖励
-        # 奖励范围：[0.0, 3.0]，距离越近奖励越大
-        reward_distance = 3.0 * torch.exp(-distance_2d / 8.0)
+        # 奖励范围：[0.0, 2.0]，距离越近奖励越大
+        reward_distance = 2.0 * torch.exp(-distance_2d / 8.0)
 
         # b. 进度奖励：距离减小的奖励（塑形奖励）
         # 奖励范围：[0.0, 13.5]
@@ -1263,6 +1263,11 @@ class NavigationEnv(IsaacEnv):
         else:
             safety_penalty_dynamic = torch.zeros_like(safety_penalty_static)
 
+        # c. 生存奖励：鼓励每步安全存活（未碰撞且未到达）
+        survival_reward = (
+            (~collision.squeeze(-1).bool()) & (~reach_goal.bool())
+        ).float() * 1.0
+
         # =========================================================================
         # 4. 平滑性奖励
         # =========================================================================
@@ -1282,11 +1287,6 @@ class NavigationEnv(IsaacEnv):
 
         # b. 到达目标奖励：大幅奖励
         goal_reward = reach_goal.float() * 120.0
-
-        # c. 生存奖励：鼓励每步安全存活（未碰撞且未到达）
-        survival_reward = (
-            (~collision.squeeze(-1).bool()) & (~reach_goal.bool())
-        ).float() * 1.0
 
         # =========================================================================
         # 6. 组合奖励
@@ -1321,16 +1321,16 @@ class NavigationEnv(IsaacEnv):
 
         # 组合奖励（固定权重）
         reward = (
-            reward_distance_2d * 1.0  # 距离奖励
-            + reward_progress_2d * 1.0  # 进度奖励
-            + reward_velocity_2d * 1.0  # 速度奖励
+            reward_distance_2d * 0.5  # 距离奖励
+            + reward_progress_2d * 2.0  # 进度奖励
+            + reward_velocity_2d * 1.5  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
-            + safety_penalty_static_2d * 5.0  # 安全惩罚
-            + safety_penalty_dynamic_2d * 5.0  # 安全惩罚
+            + safety_penalty_static_2d * 4.0  # 安全惩罚
+            + safety_penalty_dynamic_2d * 4.0  # 安全惩罚
             + angular_penalty_2d  # 平滑性惩罚
             + collision_penalty_2d  # 碰撞惩罚
             + goal_reward_2d  # 目标奖励
-            + survival_reward_2d  # 生存奖励
+            # survival_reward_2d * 0.1 # 生存奖励
         )
 
         # 确保奖励的形状是 (num_envs, 1)
