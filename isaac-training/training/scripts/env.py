@@ -114,7 +114,7 @@ class NavigationEnv(IsaacEnv):
         # LiDAR 传感器初始化
         # =========================================================================
         ray_caster_cfg = RayCasterCfg(  # RayCaster 配置：模拟 LiDAR 射线检测
-            prim_path="/World/envs/env_.*/Go2Robot_0/base_link",    # 传感器挂载路径：所有环境的机器人基座
+            prim_path=f"/World/envs/env_.*/{self.go2.name}/base_link",    # 传感器挂载路径：所有环境的机器人基座
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)), # 传感器相对于基座的偏移（无偏移）
             attach_yaw_only=True,   # 只跟随偏航角（不跟随俯仰和翻滚）
             pattern_cfg=patterns.BpearlPatternCfg(
@@ -137,7 +137,6 @@ class NavigationEnv(IsaacEnv):
         with torch.device(self.cfg.device):
             self.target_pos = torch.zeros(self.num_envs, 1, 3)  # 目标位置：世界坐标系 
             self.target_dir = torch.zeros(self.num_envs, 1, 3)  # 目标方向向量：用于坐标变换 
-            self.prev_robot_vel_w = torch.zeros(self.num_envs, 1, 3)  # 上一时刻机器人速度：用于计算平滑性奖励 
             self.reward = torch.zeros(self.num_envs, 1)  # 奖励：初始化为零 
         
         # 随机选择目标掩码索引
@@ -167,7 +166,7 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         self.go2 = Go2Robot()
         # 在高度0.4米处生成机器人（确保机器人站立在地面上）
-        self.go2.spawn(translations=[(0.0, 0.0, 0.4)])[0]
+        self.go2.spawn(translations=[(0.0, 0.0, 0.4)])
 
         # =========================================================================
         # 2. 添加光照系统
@@ -1070,9 +1069,6 @@ class NavigationEnv(IsaacEnv):
         self.go2.set_world_poses(pos, rot, env_ids)
         self.go2.set_velocities(self.init_vels[env_ids], env_ids)
 
-        # 重置速度记录
-        self.prev_robot_vel_w[env_ids] = 0.0
-
         # 重置进度奖励的距离记录（避免新 episode 第一步使用旧值）
         if hasattr(self, "prev_distance"):
             # 计算初始距离并重置
@@ -1155,7 +1151,8 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # a. 距离奖励
         # 奖励范围：[0.0, 2.0]，距离越近奖励越大
-        reward_distance = 2.0 * torch.exp(-distance_2d / 8.0)
+        b = 0.158  # 斜率常数
+        reward_distance = torch.clamp(2.0 - b * distance_2d, min=0.0)
 
         # b. 进度奖励：距离减小的奖励（塑形奖励）
         # 奖励范围：[0.0, 13.5]
@@ -1165,8 +1162,8 @@ class NavigationEnv(IsaacEnv):
         distance_improved = (self.prev_distance - distance_2d).squeeze(-1)
         self.prev_distance = distance_2d.clone()
 
-        # 只奖励距离减小，不惩罚距离增加（允许绕行）
-        reward_progress = torch.clamp(distance_improved, min=0.0) * 6.0
+        # 奖励前进、惩罚后退
+        reward_progress = torch.clamp(distance_improved, min=-0.5, max=1.0) * 8.0
 
 
         # =========================================================================
@@ -1253,15 +1250,16 @@ class NavigationEnv(IsaacEnv):
         vel_toward_goal = (vel_w[..., :2] * target_dir_normalized).sum(-1).squeeze(-1)
 
         # 速度奖励：鼓励朝向目标移动，并在静/动态任一近障时抑制高速
+        min_lidar_dist = min_lidar_dist.squeeze(-1) # [num_envs]
         min_obs_dist = torch.minimum(min_lidar_dist, min_dyn_obs_dist)
-        near_obs_speed_gate = ((min_obs_dist - 0.6) / 1.0).clamp(0.0, 1.0)
+        near_obs_speed_gate = ((min_obs_dist - 0.6) / 1.0).clamp(0.1, 1.1)
         reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * near_obs_speed_gate
 
         # b. 朝向奖励：鼓励朝向目标（与速度奖励协同）
-        # 奖励范围：[0.0, 0.5]
+        # 奖励范围：[0.0, 0.1]
         # 使用平滑的余弦函数，避免在目标附近震荡
         heading_cos = torch.cos(target_angle_relative.squeeze(-1))
-        reward_heading = torch.clamp(heading_cos, min=0.0) * 0.5
+        reward_heading = torch.clamp(heading_cos, min=0.0) * 0.1
 
         # =========================================================================
         # 4. 平滑性奖励
@@ -1316,12 +1314,12 @@ class NavigationEnv(IsaacEnv):
         reward = (
             reward_distance_2d * 0.5  # 距离奖励
             + reward_progress_2d * 2.0  # 进度奖励
-            + reward_velocity_2d * 1.2  # 速度奖励
+            + reward_velocity_2d * 2.0  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
-            + safety_penalty_static_2d * 4.0  # 安全惩罚
-            + safety_penalty_dynamic_2d * 4.0  # 安全惩罚
+            + safety_penalty_static_2d * 3.0  # 安全惩罚
+            + safety_penalty_dynamic_2d * 3.0  # 安全惩罚
             + angular_penalty_2d * 1.0 # 平滑性惩罚
-            + collision_penalty_2d  * 1.0# 碰撞惩罚
+            + collision_penalty_2d  * 1.0 # 碰撞惩罚
             + goal_reward_2d * 1.0  # 目标奖励
         )
 
@@ -1687,9 +1685,6 @@ class NavigationEnv(IsaacEnv):
         # 截断条件：达到最大回合长度
         self.truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1)
 
-        # 更新上一时刻速度（用于下次平滑性计算）
-        self.prev_robot_vel_w = self.go2.vel_w[..., :3].clone()
-
         # =========================================================================
         # 步骤9：更新统计信息
         # =========================================================================
@@ -1750,3 +1745,4 @@ class NavigationEnv(IsaacEnv):
             },
             self.batch_size,
         )
+

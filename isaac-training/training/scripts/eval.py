@@ -68,7 +68,7 @@ def main(cfg):
     # 步骤 4: 构建变换环境（与训练时相同）
     # =========================================================================
     transforms = []
-    controller = Go2VelocityController(dt=cfg.sim.dt).to(cfg.device)
+    controller = Go2VelocityController().to(cfg.device)
     vel_transform = Go2VelController(controller)
     transforms.append(vel_transform)
     transformed_env = TransformedEnv(env, Compose(*transforms)).train()

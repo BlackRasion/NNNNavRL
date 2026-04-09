@@ -10,7 +10,7 @@
 """
 
 import torch
-from torchrl.data import BoundedTensorSpec, UnboundedContinuousTensorSpec
+from torchrl.data import UnboundedContinuousTensorSpec
 from omni.isaac.core.simulation_context import SimulationContext
 import omni.isaac.core.utils.prims as prim_utils
 import omni.isaac.orbit.sim as sim_utils
@@ -27,7 +27,6 @@ class Go2Robot(RobotBase):
     简化版 Go2 四足机器人模型
 
     该类继承自 RobotBase，实现了一个简化的刚体模型用于强化学习训练。
-    与完整的关节模型不同，该模型直接控制刚体速度，大大简化了控制流程。
 
     核心功能：
     1. 创建简化的刚体物理模型（使用碰撞盒）
@@ -45,11 +44,9 @@ class Go2Robot(RobotBase):
             name: 机器人名称，用于在仿真场景中标识
             cfg: 机器人配置对象，包含物理参数等
 
-        注意:
-            - is_articulation=False 表示使用刚体模型而非关节模型
-            - 初始化后需要调用 spawn() 和 initialize() 才能使用
+        - 初始化后需要调用 spawn() 和 initialize() 才能使用
         """
-        super().__init__(name, cfg, is_articulation=False)
+        super().__init__(name, cfg, is_articulation=False) # is_articulation=False 表示使用刚体模型而非关节模型
 
         self.mass = 6.921  # 质量参数（单位：kg）
 
@@ -57,19 +54,19 @@ class Go2Robot(RobotBase):
 
         self.inertia = (0.02448, 0.098077, 0.107)  # 惯性张量（单位：kg·m²）
 
-        self.max_linear_vel = 2.25  # 最大线速度（单位：m/s）
+        self.max_linear_vel = 2.25  # 最大线速度（单位：m/s） # 实际被ppo cfg约束
 
-        self.max_angular_vel = 1.57  # 最大角速度（单位：rad/s）
-        self.max_linear_acc = 6.0
-        self.max_angular_acc = 8.0
+        self.max_angular_vel = 2.0  # 最大角速度（单位：rad/s） 
+
+        self.max_linear_acc = 1.5  # 最大线加速度（单位：m/s²）
+
+        self.max_angular_acc = 2.0  # 最大角加速度（单位：rad/s²）
 
         # =====================================================================
         # 动作和状态空间定义
         # =====================================================================
-        # 动作空间：3维连续空间，范围 [Vx_normalized, Vy_normalized, Vyaw_normalized]
-        self.action_spec = BoundedTensorSpec(
-            minimum=-1.0, maximum=1.0, shape=(3,), device=self.device
-        )
+        # 动作空间：3维连续空间 [Vx, Vy, Vyaw]
+        self.action_spec = UnboundedContinuousTensorSpec(3, device=self.device)
 
         # 状态空间：13维连续空间 [位置(3), 四元数(4), 线速度(3), 角速度(3)]
         self.state_spec = UnboundedContinuousTensorSpec(13, device=self.device)
@@ -84,7 +81,8 @@ class Go2Robot(RobotBase):
         self.rot = None  # 当前姿态（四元数，世界坐标系）
 
         self._dt = None  # 仿真时间步长
-        self._last_cmd_vel = None
+
+        self._last_cmd_vel = None # 上一帧命令速度
 
     def _create_prim(self, prim_path: str, translation, orientation):
         """
@@ -150,11 +148,10 @@ class Go2Robot(RobotBase):
 
         return root_prim
 
-    def spawn(self, translations=[(0.0, 0.0, 0.4)], orientations=None, prim_paths=None):
+    def spawn(self, translations=None, orientations=None, prim_paths=None):
         """
-        在仿真场景中生成机器人实例
+        在仿真场景中生成机器人
         必须在 simulation_context.reset() 之前调用。
-
         参数:
             translations: 初始位置列表，每个元素为 [x, y, z]
             orientations: 初始姿态列表，每个元素为四元数 [w, x, y, z]
@@ -167,6 +164,9 @@ class Go2Robot(RobotBase):
                 "Cannot spawn robots after simulation_context.reset() is called."
                 "请在 reset() 之前调用 spawn()。"
             )
+
+        if translations is None:
+            translations = [(0.0, 0.0, 0.4)]
 
         # 转换并验证位置参数
         translations = torch.atleast_2d(
@@ -255,7 +255,8 @@ class Go2Robot(RobotBase):
         self.vel_w = torch.zeros(*self.shape, 6, device=self.device)
 
     def _clamp_velocity_commands(self, commands: torch.Tensor) -> torch.Tensor:
-        commands = torch.nan_to_num(commands, nan=0.0, posinf=0.0, neginf=0.0)
+        # 返回新张量，避免对输入动作张量产生副作用
+        commands = torch.nan_to_num(commands, nan=0.0, posinf=0.0, neginf=0.0).clone()
         commands[..., 0] = torch.clamp(
             commands[..., 0], -self.max_linear_vel, self.max_linear_vel
         )
@@ -282,9 +283,14 @@ class Go2Robot(RobotBase):
         self._last_cmd_vel = limited.clone()
         return limited
 
-    def apply_action(
-        self, actions: torch.Tensor, emergency_stop: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    @staticmethod
+    def _quat_to_yaw(quat: torch.Tensor) -> torch.Tensor:
+        return torch.atan2(
+            2.0 * (quat[..., 0] * quat[..., 3] + quat[..., 1] * quat[..., 2]),
+            1.0 - 2.0 * (quat[..., 2] ** 2 + quat[..., 3] ** 2),
+        )
+
+    def apply_action(self, actions: torch.Tensor) -> torch.Tensor:
         """
         应用速度控制动作
 
@@ -296,27 +302,20 @@ class Go2Robot(RobotBase):
         返回:
             applied_actions: 实际应用的速度命令 [Vx, Vy, Vyaw]
         """
+        if self.shape is None:
+            raise RuntimeError("Go2Robot is not initialized. Call initialize() before apply_action().")
+
         actions = actions.reshape(*self.shape, 3)
 
         velocity_cmd = self._clamp_velocity_commands(actions)
         velocity_cmd = self._apply_rate_limit(velocity_cmd)
-        if emergency_stop is not None:
-            mask = emergency_stop.to(dtype=torch.bool, device=velocity_cmd.device)
-            while mask.dim() < velocity_cmd.dim():
-                mask = mask.unsqueeze(-1)
-            velocity_cmd = torch.where(
-                mask, torch.zeros_like(velocity_cmd), velocity_cmd
-            )
 
         vx_body = velocity_cmd[..., 0].reshape(*self.shape)
         vy_body = velocity_cmd[..., 1].reshape(*self.shape)
         vyaw = velocity_cmd[..., 2].reshape(*self.shape)
 
         _, rot = self.get_world_poses(clone=False)
-        yaw = torch.atan2(
-            2.0 * (rot[..., 0] * rot[..., 3] + rot[..., 1] * rot[..., 2]),
-            1.0 - 2.0 * (rot[..., 2] ** 2 + rot[..., 3] ** 2),
-        )
+        yaw = self._quat_to_yaw(rot)
         cos_yaw = torch.cos(yaw)
         sin_yaw = torch.sin(yaw)
 
@@ -404,13 +403,13 @@ class Go2Robot(RobotBase):
 
     def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
         """
-        重置指定环境的机器人状态
+        重置指定ID的机器人状态
 
         该方法在回合结束时重置机器人的速度，为新的训练回合做准备。
-        位置和姿态的重置由环境类负责。
+
 
         参数:
-            env_ids: 需要重置的环境 ID 张量
+            env_ids: 需要重置的 ID 
                     默认：None - 重置所有环境
             train: 是否为训练模式（保留参数，用于未来扩展）
                   默认：True
@@ -420,14 +419,14 @@ class Go2Robot(RobotBase):
 
         注意:
             - 该方法只重置速度，不重置位置和姿态
-            - 位置和姿态的重置由环境的 _reset_idx 方法负责
         """
         # 如果未指定环境 ID，则重置所有环境
         if env_ids is None:
             env_ids = torch.arange(self.shape[0], device=self.device)
 
         # 重置速度缓存
-        self.vel_w[env_ids] = 0.0
+        if self.vel_w is not None:
+            self.vel_w[env_ids] = 0.0
         if self._last_cmd_vel is not None:
             self._last_cmd_vel[env_ids] = 0.0
 
@@ -444,8 +443,6 @@ class Go2Robot(RobotBase):
         """
         设置机器人的世界坐标位姿
 
-        该方法直接设置机器人的位置和姿态，用于重置或初始化。
-
         参数:
             positions: 位置张量 [x, y, z]，形状为 [..., 3]
                       默认：None - 保持当前位置
@@ -453,22 +450,6 @@ class Go2Robot(RobotBase):
                          默认：None - 保持当前姿态
             env_indices: 环境索引，指定要设置的环境
                         默认：None - 设置所有环境
-
-        使用示例:
-            # 设置单个机器人的位置
-            robot.set_world_poses(
-                positions=torch.tensor([[0, 0, 0.4]]),
-                orientations=torch.tensor([[1, 0, 0, 0]])
-            )
-
-            # 设置多个机器人的位置
-            robot.set_world_poses(
-                positions=torch.tensor([[0, 0, 0.4], [2, 0, 0.4]])
-            )
-
-        注意:
-            - 位置单位为米
-            - 四元数必须归一化
         """
         return self._view.set_world_poses(
             positions, orientations, env_indices=env_indices
@@ -511,14 +492,6 @@ class Go2Robot(RobotBase):
 
         返回:
             velocities: 速度张量 [vx, vy, vz, wx, wy, wz]，形状为 [..., 6]
-
-        使用示例:
-            # 获取速度引用（不复制）
-            vel = robot.get_velocities(clone=False)
-
-            # 获取速度副本（可安全修改）
-            vel = robot.get_velocities(clone=True)
-            vel[..., 0] = 0  # 修改不会影响内部状态
         """
         return self._view.get_velocities(clone=clone)
 
@@ -534,18 +507,7 @@ class Go2Robot(RobotBase):
         返回:
             positions: 位置张量 [x, y, z]，形状为 [..., 3]
             orientations: 姿态四元数 [w, x, y, z]，形状为 [..., 4]
-
-        使用示例:
-            # 获取位姿引用（不复制）
-            pos, quat = robot.get_world_poses(clone=False)
-
-            # 获取位姿副本（可安全修改）
-            pos, quat = robot.get_world_poses(clone=True)
-            pos[..., 2] = 0.5  # 修改不会影响内部状态
-
         注意:
-            - 位置单位为米
-            - 四元数格式为 [w, x, y, z]
             - 四元数已归一化
         """
-        return self._view.get_world_poses(clone=clone)
+        return self._view.get_world_poses(clone=clone) 

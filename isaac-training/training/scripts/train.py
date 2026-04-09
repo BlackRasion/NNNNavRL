@@ -55,7 +55,7 @@ def main(cfg):
     env = NavigationEnv(cfg)
     # 构建环境变换 TransformedEnv 允许在原始环境上叠加多个变换层,这里主要添加速度控制器
     transforms = []
-    controller = Go2VelocityController(dt=cfg.sim.dt).to(cfg.device)
+    controller = Go2VelocityController().to(cfg.device)
     vel_transform = Go2VelController(controller)
     transforms.append(vel_transform)
     # 应用所有变换，创建训练环境
