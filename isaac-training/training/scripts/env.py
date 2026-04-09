@@ -114,7 +114,7 @@ class NavigationEnv(IsaacEnv):
         # LiDAR 传感器初始化
         # =========================================================================
         ray_caster_cfg = RayCasterCfg(  # RayCaster 配置：模拟 LiDAR 射线检测
-            prim_path=f"/World/envs/env_.*/{self.go2.name}/base_link",    # 传感器挂载路径：所有环境的机器人基座
+            prim_path=f"/World/envs/env_.*/{self.go2.name}_.*/base_link",    # 传感器挂载路径：所有环境的机器人基座
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)), # 传感器相对于基座的偏移（无偏移）
             attach_yaw_only=True,   # 只跟随偏航角（不跟随俯仰和翻滚）
             pattern_cfg=patterns.BpearlPatternCfg(
@@ -1086,8 +1086,7 @@ class NavigationEnv(IsaacEnv):
             tensordict[("agents", "action")]: 机器人动作 [num_envs, action_dim]
         """
         actions = tensordict[("agents", "action")]
-        emergency_stop = tensordict.get(("agents", "emergency_stop"), None)
-        self.go2.apply_action(actions, emergency_stop=emergency_stop)
+        self.go2.apply_action(actions)
 
     def _post_sim_step(self, tensordict: TensorDictBase):
         """

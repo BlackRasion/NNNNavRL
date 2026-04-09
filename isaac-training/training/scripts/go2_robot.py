@@ -90,7 +90,7 @@ class Go2Robot(RobotBase):
         模型结构：prim_path/base_link（包含碰撞体和视觉体）
 
         参数:
-            prim_path: 机器人根节点的路径（如 "/World/envs/env_0/Go2Robot_0"）
+            prim_path: 机器人根节点的路径
             translation: 初始位置 [x, y, z]
             orientation: 初始姿态（四元数）[w, x, y, z]
 
@@ -226,7 +226,7 @@ class Go2Robot(RobotBase):
             )
 
         if prim_paths_expr is None:  # 设置 prim 路径表达式
-            prim_paths_expr = f"/World/envs/.*/{self.name}_*/base_link"
+            prim_paths_expr = f"/World/envs/env_.*/{self.name}_.*/base_link"
         self.prim_paths_expr = prim_paths_expr
 
         self._view = RigidPrimView(  # 创建刚体视图（用于高效的物理操作）
