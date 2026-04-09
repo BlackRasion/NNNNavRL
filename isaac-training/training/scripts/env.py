@@ -141,7 +141,9 @@ class NavigationEnv(IsaacEnv):
             self.reward = torch.zeros(self.num_envs, 1)  # 奖励：初始化为零 
         
         # 随机选择目标掩码索引
-        self._target_mask_idx = torch.zeros(self.num_envs, dtype=torch.int32, device=self.cfg.device)
+        self._target_mask_idx = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.cfg.device
+        )
 
     def _design_scene(self):
         """
@@ -956,7 +958,9 @@ class NavigationEnv(IsaacEnv):
                 0, masks.size(0), (env_ids.size(0),), device=self.cfg.device
             )
             # 记录选择的方向掩码
-            self._target_mask_idx[env_ids] = mask_indices
+            self._target_mask_idx[env_ids] = mask_indices.to(
+                dtype=self._target_mask_idx.dtype
+            )
             selected_masks = masks[mask_indices].unsqueeze(1)
             selected_shifts = shifts[mask_indices].unsqueeze(1)
 
@@ -1287,17 +1291,33 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 6. 组合奖励
         # =========================================================================
-        # 确保所有奖励分量形状一致
-        reward_distance_2d = reward_distance if reward_distance.dim() == 2 else reward_distance.unsqueeze(-1)
-        reward_progress_2d = reward_progress if reward_progress.dim() == 2 else reward_progress.unsqueeze(-1)
-        reward_velocity_2d = reward_velocity.unsqueeze(-1) if reward_velocity.dim() == 1 else reward_velocity
-        reward_heading_2d = reward_heading.unsqueeze(-1) if reward_heading.dim() == 1 else reward_heading
-        safety_penalty_static_2d = safety_penalty_static.unsqueeze(-1) if safety_penalty_static.dim() == 1 else safety_penalty_static
-        safety_penalty_dynamic_2d = safety_penalty_dynamic.unsqueeze(-1) if safety_penalty_dynamic.dim() == 1 else safety_penalty_dynamic
-        angular_penalty_2d = angular_penalty.unsqueeze(-1) if angular_penalty.dim() == 1 else angular_penalty
-        collision_penalty_2d = collision_penalty.unsqueeze(-1) if collision_penalty.dim() == 1 else collision_penalty
-        goal_reward_2d = goal_reward.unsqueeze(-1) if goal_reward.dim() == 1 else goal_reward
-        survival_reward_2d = survival_reward.unsqueeze(-1) if survival_reward.dim() == 1 else survival_reward
+        def _as_env_column(x: torch.Tensor, name: str) -> torch.Tensor:
+            if x.dim() == 0:
+                x = x.expand(self.num_envs).unsqueeze(-1)
+            elif x.dim() == 1:
+                x = x.unsqueeze(-1)
+            else:
+                x = x.reshape(self.num_envs, -1)
+            if x.shape[1] != 1:
+                raise RuntimeError(
+                    f"{name} shape invalid after reshape: {x.shape}, expected {(self.num_envs, 1)}"
+                )
+            return x
+
+        reward_distance_2d = _as_env_column(reward_distance, "reward_distance")
+        reward_progress_2d = _as_env_column(reward_progress, "reward_progress")
+        reward_velocity_2d = _as_env_column(reward_velocity, "reward_velocity")
+        reward_heading_2d = _as_env_column(reward_heading, "reward_heading")
+        safety_penalty_static_2d = _as_env_column(
+            safety_penalty_static, "safety_penalty_static"
+        )
+        safety_penalty_dynamic_2d = _as_env_column(
+            safety_penalty_dynamic, "safety_penalty_dynamic"
+        )
+        angular_penalty_2d = _as_env_column(angular_penalty, "angular_penalty")
+        collision_penalty_2d = _as_env_column(collision_penalty, "collision_penalty")
+        goal_reward_2d = _as_env_column(goal_reward, "goal_reward")
+        survival_reward_2d = _as_env_column(survival_reward, "survival_reward")
 
         # 组合奖励（固定权重）
         reward = (

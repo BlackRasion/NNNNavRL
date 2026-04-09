@@ -296,10 +296,7 @@ class Go2Robot(RobotBase):
         返回:
             applied_actions: 实际应用的速度命令 [Vx, Vy, Vyaw]
         """
-        if actions.dim() == 1:
-            actions = actions.unsqueeze(0)
-        if actions.dim() == 2 and len(self.shape) == 2 and self.shape[1] == 1:
-            actions = actions.unsqueeze(-2)
+        actions = actions.reshape(*self.shape, 3)
 
         velocity_cmd = self._clamp_velocity_commands(actions)
         velocity_cmd = self._apply_rate_limit(velocity_cmd)
@@ -311,9 +308,9 @@ class Go2Robot(RobotBase):
                 mask, torch.zeros_like(velocity_cmd), velocity_cmd
             )
 
-        vx_body = velocity_cmd[..., 0]
-        vy_body = velocity_cmd[..., 1]
-        vyaw = velocity_cmd[..., 2]
+        vx_body = velocity_cmd[..., 0].reshape(*self.shape)
+        vy_body = velocity_cmd[..., 1].reshape(*self.shape)
+        vyaw = velocity_cmd[..., 2].reshape(*self.shape)
 
         _, rot = self.get_world_poses(clone=False)
         yaw = torch.atan2(
@@ -323,16 +320,16 @@ class Go2Robot(RobotBase):
         cos_yaw = torch.cos(yaw)
         sin_yaw = torch.sin(yaw)
 
-        vx_world = vx_body * cos_yaw - vy_body * sin_yaw
-        vy_world = vx_body * sin_yaw + vy_body * cos_yaw
+        vx_world = (vx_body * cos_yaw - vy_body * sin_yaw).reshape(*self.shape)
+        vy_world = (vx_body * sin_yaw + vy_body * cos_yaw).reshape(*self.shape)
 
         new_vel = torch.zeros(*self.shape, 6, device=self.device)
-        new_vel[..., 0] = vx_world.unsqueeze(-1)
-        new_vel[..., 1] = vy_world.unsqueeze(-1)
+        new_vel[..., 0] = vx_world
+        new_vel[..., 1] = vy_world
         new_vel[..., 2] = 0.0  # 线速度 z（固定为 0）
         new_vel[..., 3] = 0.0  # 角速度 roll（固定为 0）
         new_vel[..., 4] = 0.0  # 角速度 pitch（固定为 0）
-        new_vel[..., 5] = vyaw.unsqueeze(-1)
+        new_vel[..., 5] = vyaw
 
         self.set_velocities(new_vel)  # 应用速度
         return torch.stack([vx_body, vy_body, vyaw], dim=-1)
@@ -405,7 +402,7 @@ class Go2Robot(RobotBase):
 
         return state
 
-    def _reset_idx_vel(self, env_ids: torch.Tensor, train: bool = True):
+    def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
         """
         重置指定环境的机器人状态
 
@@ -439,6 +436,9 @@ class Go2Robot(RobotBase):
         self.set_velocities(zero_vel, env_indices=env_ids)
 
         return env_ids
+
+    def _reset_idx_vel(self, env_ids: torch.Tensor, train: bool = True):
+        return self._reset_idx(env_ids, train)
 
     def set_world_poses(self, positions=None, orientations=None, env_indices=None):
         """
