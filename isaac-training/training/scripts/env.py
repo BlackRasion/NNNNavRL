@@ -1158,12 +1158,12 @@ class NavigationEnv(IsaacEnv):
         # =========================================================================
         # 1. 目标导向奖励（核心） reward_distance
         # =========================================================================
-        # a. 距离惩罚：使用对数形式，避免尺度问题
-        # 惩罚范围：[-7.9, -0.4]，距离越近惩罚越小
-        reward_distance = -torch.log(distance_2d.clamp(0.5, 50.0) + 0.7) * 2.0                                      
+        # a. 距离奖励
+        # 奖励范围：[0.0, 3.0]，距离越近奖励越大
+        reward_distance = 3.0 * torch.exp(-distance_2d / 8.0)
 
         # b. 进度奖励：距离减小的奖励（塑形奖励）
-        # 奖励范围：[0.0, 9.0]
+        # 奖励范围：[0.0, 13.5]
         if not hasattr(self, "prev_distance"):
             self.prev_distance = distance_2d.clone()
 
@@ -1171,7 +1171,7 @@ class NavigationEnv(IsaacEnv):
         self.prev_distance = distance_2d.clone()
 
         # 只奖励距离减小，不惩罚距离增加（允许绕行）
-        reward_progress = torch.clamp(distance_improved, min=0.0) * 4.0
+        reward_progress = torch.clamp(distance_improved, min=0.0) * 6.0
 
         # =========================================================================
         # 2. 运动效率奖励
@@ -1278,15 +1278,15 @@ class NavigationEnv(IsaacEnv):
         # 5. 终止奖励（稀疏奖励）
         # =========================================================================
         # a. 碰撞惩罚：大幅惩罚
-        collision_penalty = collision.float().squeeze(-1) * (-30.0)
+        collision_penalty = collision.float().squeeze(-1) * (-130.0)
 
         # b. 到达目标奖励：大幅奖励
-        goal_reward = reach_goal.float() * 25.0
+        goal_reward = reach_goal.float() * 120.0
 
         # c. 生存奖励：鼓励每步安全存活（未碰撞且未到达）
         survival_reward = (
             (~collision.squeeze(-1).bool()) & (~reach_goal.bool())
-        ).float() * 0.3
+        ).float() * 1.0
 
         # =========================================================================
         # 6. 组合奖励
@@ -1325,11 +1325,11 @@ class NavigationEnv(IsaacEnv):
             + reward_progress_2d * 1.0  # 进度奖励
             + reward_velocity_2d * 1.0  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
-            + safety_penalty_static_2d * 2.0  # 安全惩罚
-            + safety_penalty_dynamic_2d * 2.0  # 安全惩罚
-            - angular_penalty_2d  # 平滑性惩罚
+            + safety_penalty_static_2d * 5.0  # 安全惩罚
+            + safety_penalty_dynamic_2d * 5.0  # 安全惩罚
+            + angular_penalty_2d  # 平滑性惩罚
             + collision_penalty_2d  # 碰撞惩罚
-            + goal_reward_2d  # 目标奖励
+            + reward_goal  # 目标奖励
             + survival_reward_2d  # 生存奖励
         )
 
@@ -1349,7 +1349,7 @@ class NavigationEnv(IsaacEnv):
             "reward_safety_dynamic": safety_penalty_dynamic_2d,
             "reward_angular_penalty": angular_penalty_2d,
             "reward_collision": collision_penalty_2d,
-            "reward_goal": goal_reward_2d,
+            "reward_goal": reward_goal,
             "reward_survival": survival_reward_2d,
         }
 
