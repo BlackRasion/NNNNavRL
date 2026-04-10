@@ -5,7 +5,7 @@ import wandb
 import torch
 from omni.isaac.kit import SimulationApp
 from ppo import PPO
-from go2_velocity_controller import Go2VelocityController, Go2VelController
+from go2_velocity_controller import Go2VelController
 from omni_drones.utils.torchrl import SyncDataCollector, EpisodeStats
 from torchrl.envs.transforms import TransformedEnv, Compose
 from utils import evaluate
@@ -55,8 +55,7 @@ def main(cfg):
     env = NavigationEnv(cfg)
     # 构建环境变换 TransformedEnv 允许在原始环境上叠加多个变换层,这里主要添加速度控制器
     transforms = []
-    controller = Go2VelocityController().to(cfg.device)
-    vel_transform = Go2VelController(controller)
+    vel_transform = Go2VelController()
     transforms.append(vel_transform)
     # 应用所有变换，创建训练环境
     transformed_env = TransformedEnv(env, Compose(*transforms)).train()

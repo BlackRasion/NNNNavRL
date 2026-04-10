@@ -9,6 +9,8 @@
 - 惯性张量: ixx=0.02448, iyy=0.098077, izz=0.107
 """
 
+from typing import Optional
+
 import torch
 from torchrl.data import UnboundedContinuousTensorSpec
 from omni.isaac.core.simulation_context import SimulationContext
@@ -18,8 +20,9 @@ import omni.isaac.orbit.sim as sim_utils
 from omni_drones.robots import RobotBase, RobotCfg
 from omni_drones.views import RigidPrimView
 
-# 机器人模板路径，用于生成多个机器人实例
-TEMPLATE_PRIM_PATH = "/World/envs/env_0"
+# 机器人路径根目录与默认匹配表达式
+TEMPLATE_PRIM_ROOT = "/World/envs"
+DEFAULT_PRIM_PATH_EXPR_TEMPLATE = "/World/envs/env_.*/{name}_.*/base_link"
 
 
 class Go2Robot(RobotBase):
@@ -121,8 +124,8 @@ class Go2Robot(RobotBase):
                 solver_position_iteration_count=4,  # 位置迭代次数
                 solver_velocity_iteration_count=4,  # 速度迭代次数
                 # 速度限制（防止物理仿真不稳定）
-                max_angular_velocity=self.max_angular_vel * 1.5,  # 最大角速度
-                max_linear_velocity=self.max_linear_vel * 1.5,  # 最大线速度
+                max_angular_velocity=self.max_angular_vel,  # 最大角速度
+                max_linear_velocity=self.max_linear_vel,  # 最大线速度
                 max_depenetration_velocity=1.0,  # 最大穿透修正速度
                 # 阻尼系数（模拟空气阻力等）
                 linear_damping=0.5,  # 线性阻尼
@@ -159,12 +162,6 @@ class Go2Robot(RobotBase):
         返回:
             prims: 创建的 prim 对象列表
         """
-        if SimulationContext.instance()._physics_sim_view is not None:  # 检查仿真状态
-            raise RuntimeError(
-                "Cannot spawn robots after simulation_context.reset() is called."
-                "请在 reset() 之前调用 spawn()。"
-            )
-
         if translations is None:
             translations = [(0.0, 0.0, 0.4)]
 
@@ -178,16 +175,9 @@ class Go2Robot(RobotBase):
         if orientations is None:
             orientations = [None for _ in range(n)]
 
-        # 生成默认 prim 路径
+        # 生成默认 prim 路径（与 initialize 的默认匹配表达式保持同一命名风格）
         if prim_paths is None:
-            prim_paths = [f"{TEMPLATE_PRIM_PATH}/{self.name}_{i}" for i in range(n)]
-
-        # 验证参数长度一致性
-        if not len(translations) == len(prim_paths):
-            raise ValueError(
-                f"translations 长度 ({len(translations)}) 与 "
-                f"prim_paths 长度 ({len(prim_paths)}) 不匹配"
-            )
+            prim_paths = [f"{TEMPLATE_PRIM_ROOT}/env_{i}/{self.name}_{i}" for i in range(n)]
 
         # 创建机器人实例
         prims = []
@@ -210,36 +200,29 @@ class Go2Robot(RobotBase):
 
         return prims
 
-    def initialize(self, prim_paths_expr: str = None):
+    def initialize(self, prim_paths_expr: Optional[str] = None):
         """
         该方法初始化机器人的物理视图和状态变量。
-        必须在 simulation_context.reset() 之后调用。
 
         参数:
             prim_paths_expr: prim 路径表达式，用于匹配机器人实例
                            默认：None - 使用自动生成的路径表达式
         """
-        if SimulationContext.instance()._physics_sim_view is None:  # 检查仿真状态
-            raise RuntimeError(
-                f"Cannot initialize {self.__class__.__name__} before the simulation context resets. "
-                f"请先调用 simulation_context.reset()。"
-            )
-
         if prim_paths_expr is None:  # 设置 prim 路径表达式
-            prim_paths_expr = f"/World/envs/env_.*/{self.name}_.*/base_link"
+            prim_paths_expr = DEFAULT_PRIM_PATH_EXPR_TEMPLATE.format(name=self.name)
         self.prim_paths_expr = prim_paths_expr
 
         self._view = RigidPrimView(  # 创建刚体视图（用于高效的物理操作）
             self.prim_paths_expr,
             reset_xform_properties=False,
-            shape=(-1, self.n),
+            shape=(-1, self.n), 
         )
 
         # 初始化视图
         self._view.initialize()
         self._view.post_reset()
 
-        # 计算形状（优化：直接计算而非创建临时张量）
+        # 计算形状
         num_envs = self._view.count // self.n
         self.shape = (num_envs, self.n)
 
@@ -292,19 +275,14 @@ class Go2Robot(RobotBase):
 
     def apply_action(self, actions: torch.Tensor) -> torch.Tensor:
         """
-        应用速度控制动作
-
-        该方法将归一化的动作转换为实际速度命令，并应用到机器人。
+        应用实际速度控制命令到机器人。
 
         参数:
-            actions: 速度命令张量，形状为 [..., 3]
+            actions: 速度命令张量，形状为 [3]
 
         返回:
             applied_actions: 实际应用的速度命令 [Vx, Vy, Vyaw]
         """
-        if self.shape is None:
-            raise RuntimeError("Go2Robot is not initialized. Call initialize() before apply_action().")
-
         actions = actions.reshape(*self.shape, 3)
 
         velocity_cmd = self._clamp_velocity_commands(actions)
@@ -332,6 +310,80 @@ class Go2Robot(RobotBase):
 
         self.set_velocities(new_vel)  # 应用速度
         return torch.stack([vx_body, vy_body, vyaw], dim=-1)
+
+    def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
+        """
+        在回合结束时重置机器人的速度，为新的训练回合做准备。
+
+        参数:
+            env_ids: 需要重置的 ID 
+                    默认：None - 重置所有环境
+            train: 是否为训练模式（保留参数，用于未来扩展）
+
+        返回:
+            env_ids: 实际重置的环境 ID
+
+        注意:
+            - 该方法只重置速度，不重置位置和姿态
+        """
+        # 如果未指定环境 ID，则重置所有环境
+        if env_ids is None:
+            env_ids = torch.arange(self.shape[0], device=self.device)
+
+        # 重置速度缓存
+        if self.vel_w is not None:
+            self.vel_w[env_ids] = 0.0
+        if self._last_cmd_vel is not None:
+            self._last_cmd_vel[env_ids] = 0.0
+
+        # 设置速度为零
+        zero_vel = torch.zeros(len(env_ids), 6, device=self.device)
+        self.set_velocities(zero_vel, env_indices=env_ids)
+
+        return env_ids
+
+    def _reset_idx_vel(self, env_ids: torch.Tensor, train: bool = True):
+        return self._reset_idx(env_ids, train)
+
+    def set_world_poses(self, positions=None, orientations=None, env_indices=None):
+        """
+        设置机器人的世界坐标位姿
+
+        参数:
+            positions: 位置张量 [x, y, z]，形状为 [..., 3]
+                      默认：None - 保持当前位置
+            orientations: 姿态四元数 [w, x, y, z]，形状为 [..., 4]
+                         默认：None - 保持当前姿态
+            env_indices: 环境索引，指定要设置的环境
+                        默认：None - 设置所有环境
+        """
+        return self._view.set_world_poses(
+            positions, orientations, env_indices=env_indices
+        )
+
+    def set_velocities(self, velocities, env_indices=None):
+        """
+        直接设置机器人的线速度和角速度。
+
+        参数:
+            velocities: 速度张量 [vx, vy, vz, wx, wy, wz]，形状为 [..., 6]
+                       - vx, vy, vz: 线速度（单位：m/s）
+                       - wx, wy, wz: 角速度（单位：rad/s）
+            env_indices: 环境索引，指定要设置的环境
+                        默认：None - 设置所有环境
+
+        使用示例:
+            # 设置前进速度 1 m/s
+            robot.set_velocities(torch.tensor([[1, 0, 0, 0, 0, 0]]))
+
+            # 设置旋转速度
+            robot.set_velocities(torch.tensor([[0, 0, 0, 0, 0, 0.5]]))
+
+        注意:
+            - 速度在世界坐标系中表示
+            - 该方法会立即生效，不考虑动力学约束
+        """
+        return self._view.set_velocities(velocities, env_indices=env_indices)
 
     def get_state(self, check_nan: bool = False, env_frame: bool = True):
         """
@@ -401,86 +453,6 @@ class Go2Robot(RobotBase):
 
         return state
 
-    def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
-        """
-        重置指定ID的机器人状态
-
-        该方法在回合结束时重置机器人的速度，为新的训练回合做准备。
-
-
-        参数:
-            env_ids: 需要重置的 ID 
-                    默认：None - 重置所有环境
-            train: 是否为训练模式（保留参数，用于未来扩展）
-                  默认：True
-
-        返回:
-            env_ids: 实际重置的环境 ID
-
-        注意:
-            - 该方法只重置速度，不重置位置和姿态
-        """
-        # 如果未指定环境 ID，则重置所有环境
-        if env_ids is None:
-            env_ids = torch.arange(self.shape[0], device=self.device)
-
-        # 重置速度缓存
-        if self.vel_w is not None:
-            self.vel_w[env_ids] = 0.0
-        if self._last_cmd_vel is not None:
-            self._last_cmd_vel[env_ids] = 0.0
-
-        # 设置速度为零
-        zero_vel = torch.zeros(len(env_ids), 6, device=self.device)
-        self.set_velocities(zero_vel, env_indices=env_ids)
-
-        return env_ids
-
-    def _reset_idx_vel(self, env_ids: torch.Tensor, train: bool = True):
-        return self._reset_idx(env_ids, train)
-
-    def set_world_poses(self, positions=None, orientations=None, env_indices=None):
-        """
-        设置机器人的世界坐标位姿
-
-        参数:
-            positions: 位置张量 [x, y, z]，形状为 [..., 3]
-                      默认：None - 保持当前位置
-            orientations: 姿态四元数 [w, x, y, z]，形状为 [..., 4]
-                         默认：None - 保持当前姿态
-            env_indices: 环境索引，指定要设置的环境
-                        默认：None - 设置所有环境
-        """
-        return self._view.set_world_poses(
-            positions, orientations, env_indices=env_indices
-        )
-
-    def set_velocities(self, velocities, env_indices=None):
-        """
-        设置机器人的速度
-
-        该方法直接设置机器人的线速度和角速度。
-
-        参数:
-            velocities: 速度张量 [vx, vy, vz, wx, wy, wz]，形状为 [..., 6]
-                       - vx, vy, vz: 线速度（单位：m/s）
-                       - wx, wy, wz: 角速度（单位：rad/s）
-            env_indices: 环境索引，指定要设置的环境
-                        默认：None - 设置所有环境
-
-        使用示例:
-            # 设置前进速度 1 m/s
-            robot.set_velocities(torch.tensor([[1, 0, 0, 0, 0, 0]]))
-
-            # 设置旋转速度
-            robot.set_velocities(torch.tensor([[0, 0, 0, 0, 0, 0.5]]))
-
-        注意:
-            - 速度在世界坐标系中表示
-            - 该方法会立即生效，不考虑动力学约束
-        """
-        return self._view.set_velocities(velocities, env_indices=env_indices)
-
     def get_velocities(self, clone: bool = False):
         """
         获取机器人的当前速度
@@ -507,7 +479,5 @@ class Go2Robot(RobotBase):
         返回:
             positions: 位置张量 [x, y, z]，形状为 [..., 3]
             orientations: 姿态四元数 [w, x, y, z]，形状为 [..., 4]
-        注意:
-            - 四元数已归一化
         """
         return self._view.get_world_poses(clone=clone) 
