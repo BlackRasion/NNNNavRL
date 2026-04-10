@@ -23,11 +23,11 @@ class Go2VelController(Transform):
 
     def __init__(
         self,
-        controller: Go2VelocityController,
+        controller: Go2VelocityController = None,
         action_key: tuple = ("agents", "action"),
     ) -> None:
         super().__init__([], in_keys_inv=[action_key])
-        self.controller = controller
+        self.controller = controller if controller is not None else Go2VelocityController()
         self.action_key = action_key
 
     def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:

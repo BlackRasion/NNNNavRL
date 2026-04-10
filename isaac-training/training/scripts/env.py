@@ -1175,7 +1175,11 @@ class NavigationEnv(IsaacEnv):
         # 将 lidar 值转换为实际距离
         # lidar_value = lidar_range - actual_distance
         # actual_distance = lidar_range - lidar_value
-        min_lidar_dist = self.lidar_range - max_lidar_value
+        min_lidar_dist = (self.lidar_range - max_lidar_value).squeeze(-1)
+        # 输出形状调试
+        print("max_lidar_value.shape:", max_lidar_value.shape)
+        print("min_lidar_dist.shape:", min_lidar_dist.shape)
+
 
         # 使用平滑分段函数：在 [0.5, 0.7] 区间对线性段与指数段做 smoothstep 混合，
         static_linear = -(1.5 - min_lidar_dist)
@@ -1206,6 +1210,8 @@ class NavigationEnv(IsaacEnv):
         if self.cfg.env_dyn.num_obstacles != 0 and closest_dyn_obs_distance_reward is not None:
             # 使用与静态障碍物相同的分段函数
             min_dyn_obs_dist = closest_dyn_obs_distance_reward.min(dim=-1)[0]
+            # 输出形状调试
+            print("min_dyn_obs_dist.shape:", min_dyn_obs_dist.shape)
 
             dynamic_linear = -(1.5 - min_dyn_obs_dist)
             dynamic_exp_scale = float(0.9 * np.exp(0.6 / 0.3))
@@ -1249,7 +1255,6 @@ class NavigationEnv(IsaacEnv):
         vel_toward_goal = (vel_w[..., :2] * target_dir_normalized).sum(-1).squeeze(-1)
 
         # 速度奖励：鼓励朝向目标移动，并在静/动态任一近障时抑制高速
-        min_lidar_dist = min_lidar_dist.squeeze(-1) # [num_envs]
         min_obs_dist = torch.minimum(min_lidar_dist, min_dyn_obs_dist)
         near_obs_speed_gate = ((min_obs_dist - 0.50) / 1.0).clamp(0.1, 1.1)
         reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * near_obs_speed_gate
