@@ -1315,8 +1315,8 @@ class NavigationEnv(IsaacEnv):
             + reward_progress_2d * 2.0  # 进度奖励
             + reward_velocity_2d * 2.0  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
-            + safety_penalty_static_2d * 3.0  # 安全惩罚
-            + safety_penalty_dynamic_2d * 3.0  # 安全惩罚
+            + safety_penalty_static_2d * 2.8  # 安全惩罚
+            + safety_penalty_dynamic_2d * 2.8  # 安全惩罚
             + angular_penalty_2d * 1.0 # 平滑性惩罚
             + collision_penalty_2d  * 1.0 # 碰撞惩罚
             + goal_reward_2d * 1.0  # 目标奖励
