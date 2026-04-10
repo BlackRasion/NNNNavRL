@@ -172,7 +172,7 @@ class PPO(TensorDictModuleBase):
         # =====================================================================
         rewards = tensordict["next", "agents", "reward"]          # 奖励: 状态转移获得的即时奖励
     
-        dones = tensordict["next", "terminated"]          # 终止标志: 下一状态是否为终止状态
+        dones = tensordict["next", "done"]          # 终止标志: 下一状态是否为终止状态
 
         values = tensordict["state_value"]          # 当前状态价值: 前向传播时已计算并存储
         
@@ -251,8 +251,8 @@ class PPO(TensorDictModuleBase):
         # =====================================================================
         # 熵衡量策略的随机性，高熵 = 更多探索
         # 损失函数中减去熵，鼓励策略保持一定随机性
-        action_entropy = action_dist.entropy()
-        entropy_loss = -self.cfg.entropy_loss_coefficient * torch.mean(action_entropy)
+        action_entropy_loss = action_dist.entropy()
+        entropy_loss = -self.cfg.entropy_loss_coefficient * torch.mean(action_entropy_loss)
 
         # =====================================================================
         # 步骤 4: 计算 Actor 损失（PPO 核心）
