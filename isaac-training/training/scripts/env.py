@@ -1251,7 +1251,7 @@ class NavigationEnv(IsaacEnv):
         # 速度奖励：鼓励朝向目标移动，并在静/动态任一近障时抑制高速
         min_lidar_dist = min_lidar_dist.squeeze(-1) # [num_envs]
         min_obs_dist = torch.minimum(min_lidar_dist, min_dyn_obs_dist)
-        near_obs_speed_gate = ((min_obs_dist - 0.25) / 1.0).clamp(0.1, 1.1)
+        near_obs_speed_gate = ((min_obs_dist - 0.30) / 1.0).clamp(0.1, 1.1)
         reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * near_obs_speed_gate
 
         # b. 朝向奖励：鼓励朝向目标（与速度奖励协同）
@@ -1312,11 +1312,11 @@ class NavigationEnv(IsaacEnv):
         # 组合奖励（固定权重）
         reward = (
             reward_distance_2d * 0.5  # 距离奖励
-            + reward_progress_2d * 2.0  # 进度奖励
+            + reward_progress_2d * 2.5  # 进度奖励
             + reward_velocity_2d * 2.0  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
-            + safety_penalty_static_2d * 2.8  # 安全惩罚
-            + safety_penalty_dynamic_2d * 2.8  # 安全惩罚
+            + safety_penalty_static_2d * 3.0  # 安全惩罚
+            + safety_penalty_dynamic_2d * 3.0  # 安全惩罚
             + angular_penalty_2d * 1.0 # 平滑性惩罚
             + collision_penalty_2d  * 1.0 # 碰撞惩罚
             + goal_reward_2d * 1.0  # 目标奖励
