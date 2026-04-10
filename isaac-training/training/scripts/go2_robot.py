@@ -238,36 +238,39 @@ class Go2Robot(RobotBase):
         self.vel_w = torch.zeros(*self.shape, 6, device=self.device)
 
     def _clamp_velocity_commands(self, commands: torch.Tensor) -> torch.Tensor:
-        # 返回新张量，避免对输入动作张量产生副作用
-        commands = torch.nan_to_num(commands, nan=0.0, posinf=0.0, neginf=0.0).clone()
-        commands[..., 0] = torch.clamp(
-            commands[..., 0], -self.max_linear_vel, self.max_linear_vel
-        )
-        commands[..., 1] = torch.clamp(
-            commands[..., 1], -self.max_linear_vel, self.max_linear_vel
-        )
-        commands[..., 2] = torch.clamp(
-            commands[..., 2], -self.max_angular_vel, self.max_angular_vel
-        )
+        commands = torch.nan_to_num(commands, nan=0.0, posinf=0.0, neginf=0.0) # 将NaN，Inf，-Inf替换为0
+        # 限制速度命令在最大速度范围内
+        limits = torch.tensor([
+            self.max_linear_vel, 
+            self.max_linear_vel, 
+            self.max_angular_vel
+        ], device=commands.device)
+        commands = torch.clamp(commands, -limits, limits)
         return commands
 
     def _apply_rate_limit(self, commands: torch.Tensor) -> torch.Tensor:
+        # 如果是首次调用或形状不匹配，直接返回当前命令
         if self._last_cmd_vel is None or self._last_cmd_vel.shape != commands.shape:
             self._last_cmd_vel = commands.clone()
             return commands
+
         dt = self._dt if self._dt is not None else 0.016
-        max_dv = self.max_linear_acc * dt
-        max_dw = self.max_angular_acc * dt
-        delta = commands - self._last_cmd_vel
-        delta[..., 0] = torch.clamp(delta[..., 0], -max_dv, max_dv)
-        delta[..., 1] = torch.clamp(delta[..., 1], -max_dv, max_dv)
-        delta[..., 2] = torch.clamp(delta[..., 2], -max_dw, max_dw)
-        limited = self._last_cmd_vel + delta
-        self._last_cmd_vel = limited.clone()
+        max_dv = self.max_linear_acc * dt # 单步最大线速度变化
+        max_dw = self.max_angular_acc * dt # 单步最大角速度变化
+
+        max_delta = torch.tensor([max_dv, max_dv, max_dw], device=commands.device)
+        
+        delta = commands - self._last_cmd_vel # 计算速度变化量
+        delta = torch.clamp(delta, -max_delta, max_delta) # 限制速度变化量在最大范围内
+
+        limited = self._last_cmd_vel + delta # 计算限制后的速度命令
+        self._last_cmd_vel = limited.clone() # 更新上次命令速度
         return limited
 
     @staticmethod
     def _quat_to_yaw(quat: torch.Tensor) -> torch.Tensor:
+        # 从四元数中提取 yaw 角度
+        # 公式：yaw = atan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2^2 + q3^2))
         return torch.atan2(
             2.0 * (quat[..., 0] * quat[..., 3] + quat[..., 1] * quat[..., 2]),
             1.0 - 2.0 * (quat[..., 2] ** 2 + quat[..., 3] ** 2),
@@ -278,27 +281,33 @@ class Go2Robot(RobotBase):
         应用实际速度控制命令到机器人。
 
         参数:
-            actions: 速度命令张量，形状为 [3]
+            actions: 速度命令张量，形状为 [num_envs, 3]，机器人自身坐标系下
 
         返回:
-            applied_actions: 实际应用的速度命令 [Vx, Vy, Vyaw]
+            applied_actions: 实际应用的速度命令 [Vx, Vy, Vyaw]，世界坐标系下
         """
-        actions = actions.reshape(*self.shape, 3)
+        if actions.dim() != 2 or actions.shape[-1] != 3:
+            raise ValueError(
+                "当前仅支持动作张量形状 [num_envs, 3]，"
+                f"收到 {actions.shape}"
+            )
 
-        velocity_cmd = self._clamp_velocity_commands(actions)
-        velocity_cmd = self._apply_rate_limit(velocity_cmd)
+        actions = actions.unsqueeze(1)
 
-        vx_body = velocity_cmd[..., 0].reshape(*self.shape)
-        vy_body = velocity_cmd[..., 1].reshape(*self.shape)
-        vyaw = velocity_cmd[..., 2].reshape(*self.shape)
+        velocity_cmd = self._clamp_velocity_commands(actions) # 限制速度命令在最大速度范围内
+        velocity_cmd = self._apply_rate_limit(velocity_cmd) # 限制速度变化量在最大范围内
+
+        vx_body = velocity_cmd[..., 0]
+        vy_body = velocity_cmd[..., 1]
+        vyaw = velocity_cmd[..., 2]
 
         _, rot = self.get_world_poses(clone=False)
-        yaw = self._quat_to_yaw(rot)
-        cos_yaw = torch.cos(yaw)
+        yaw = self._quat_to_yaw(rot) # 从四元数中提取 yaw 角度
+        cos_yaw = torch.cos(yaw) 
         sin_yaw = torch.sin(yaw)
-
-        vx_world = (vx_body * cos_yaw - vy_body * sin_yaw).reshape(*self.shape)
-        vy_world = (vx_body * sin_yaw + vy_body * cos_yaw).reshape(*self.shape)
+        # 计算世界坐标系下的速度
+        vx_world = vx_body * cos_yaw - vy_body * sin_yaw
+        vy_world = vx_body * sin_yaw + vy_body * cos_yaw
 
         new_vel = torch.zeros(*self.shape, 6, device=self.device)
         new_vel[..., 0] = vx_world
@@ -311,14 +320,13 @@ class Go2Robot(RobotBase):
         self.set_velocities(new_vel)  # 应用速度
         return torch.stack([vx_body, vy_body, vyaw], dim=-1)
 
-    def _reset_idx(self, env_ids: torch.Tensor, train: bool = True):
+    def _reset_idx(self, env_ids: torch.Tensor):
         """
         在回合结束时重置机器人的速度，为新的训练回合做准备。
 
         参数:
             env_ids: 需要重置的 ID 
                     默认：None - 重置所有环境
-            train: 是否为训练模式（保留参数，用于未来扩展）
 
         返回:
             env_ids: 实际重置的环境 ID
@@ -342,8 +350,8 @@ class Go2Robot(RobotBase):
 
         return env_ids
 
-    def _reset_idx_vel(self, env_ids: torch.Tensor, train: bool = True):
-        return self._reset_idx(env_ids, train)
+    def _reset_idx_vel(self, env_ids: torch.Tensor):
+        return self._reset_idx(env_ids)
 
     def set_world_poses(self, positions=None, orientations=None, env_indices=None):
         """
@@ -366,37 +374,20 @@ class Go2Robot(RobotBase):
         直接设置机器人的线速度和角速度。
 
         参数:
-            velocities: 速度张量 [vx, vy, vz, wx, wy, wz]，形状为 [..., 6]
-                       - vx, vy, vz: 线速度（单位：m/s）
-                       - wx, wy, wz: 角速度（单位：rad/s）
+            velocities: 速度张量 [vx, vy, vz, wx, wy, wz]，形状为 [num_envs, 6]
             env_indices: 环境索引，指定要设置的环境
                         默认：None - 设置所有环境
-
-        使用示例:
-            # 设置前进速度 1 m/s
-            robot.set_velocities(torch.tensor([[1, 0, 0, 0, 0, 0]]))
-
-            # 设置旋转速度
-            robot.set_velocities(torch.tensor([[0, 0, 0, 0, 0, 0.5]]))
-
         注意:
             - 速度在世界坐标系中表示
             - 该方法会立即生效，不考虑动力学约束
         """
         return self._view.set_velocities(velocities, env_indices=env_indices)
 
-    def get_state(self, check_nan: bool = False, env_frame: bool = True):
+    def get_state(self):
         """
         获取机器人当前状态
 
         该方法返回机器人的完整状态信息，包括位置、姿态和速度。
-        这是策略网络观测的主要来源。
-
-        参数:
-            check_nan: 是否检查 NaN 值（用于调试）
-                      默认：False
-            env_frame: 是否返回环境坐标系下的位置
-                      默认：True - 减去环境偏移量
 
         返回:
             state: 状态张量，形状为 [..., 13]
@@ -405,27 +396,16 @@ class Go2Robot(RobotBase):
                   - state[..., 7:10]: 线速度 [vx, vy, vz]
                   - state[..., 10:13]: 角速度 [wx, wy, wz]
 
-        使用示例:
-            state = robot.get_state()
-            pos = state[..., :3]      # 位置
-            quat = state[..., 3:7]    # 姿态
-            lin_vel = state[..., 7:10]  # 线速度
-            ang_vel = state[..., 10:13] # 角速度
-
         注意:
-            - 位置在世界坐标系（或环境坐标系）中表示
+            - 位置在世界坐标系中表示
             - 速度在世界坐标系中表示
             - 四元数格式为 [w, x, y, z]
         """
         # 获取当前位置和姿态
-        pos, rot = self.get_world_poses(clone=True)
-
-        # 转换到环境坐标系（如果需要）
-        if env_frame and hasattr(self, "_envs_positions"):
-            pos = pos - self._envs_positions
+        pos, rot = self.get_world_poses()
 
         # 获取当前速度
-        vel_w = self.get_velocities(clone=True)
+        vel_w = self.get_velocities()
 
         # 组合状态向量
         state = torch.cat(
@@ -437,14 +417,6 @@ class Go2Robot(RobotBase):
             ],
             dim=-1,
         )
-
-        # 检查 NaN 值（用于调试）
-        if check_nan:
-            if torch.isnan(state).any():
-                raise ValueError(
-                    "检测到 NaN 值！状态数据包含无效值。"
-                    f"NaN 位置：{torch.where(torch.isnan(state))}"
-                )
 
         # 更新内部状态缓存（用于其他方法）
         self.pos = pos

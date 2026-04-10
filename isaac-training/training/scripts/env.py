@@ -999,7 +999,7 @@ class NavigationEnv(IsaacEnv):
             需要重置的机器人 ID 张量
         """
         # 重置机器人速度
-        self.go2._reset_idx_vel(env_ids, self.training)
+        self.go2._reset_idx_vel(env_ids)
 
         # 重置目标位置
         self.reset_target(env_ids)
@@ -1083,7 +1083,7 @@ class NavigationEnv(IsaacEnv):
         仿真步前处理：应用动作到机器人
         参数：
         ----------
-            tensordict[("agents", "action")]: 机器人动作 [num_envs, action_dim]
+            tensordict[("agents", "action")]: 机器人动作 [num_envs, 3]
         """
         actions = tensordict[("agents", "action")]
         self.go2.apply_action(actions)
@@ -1176,9 +1176,6 @@ class NavigationEnv(IsaacEnv):
         # lidar_value = lidar_range - actual_distance
         # actual_distance = lidar_range - lidar_value
         min_lidar_dist = (self.lidar_range - max_lidar_value).squeeze(-1)
-        # 输出形状调试
-        print("max_lidar_value.shape:", max_lidar_value.shape)
-        print("min_lidar_dist.shape:", min_lidar_dist.shape)
 
 
         # 使用平滑分段函数：在 [0.5, 0.7] 区间对线性段与指数段做 smoothstep 混合，
@@ -1210,9 +1207,6 @@ class NavigationEnv(IsaacEnv):
         if self.cfg.env_dyn.num_obstacles != 0 and closest_dyn_obs_distance_reward is not None:
             # 使用与静态障碍物相同的分段函数
             min_dyn_obs_dist = closest_dyn_obs_distance_reward.min(dim=-1)[0]
-            # 输出形状调试
-            print("min_dyn_obs_dist.shape:", min_dyn_obs_dist.shape)
-
             dynamic_linear = -(1.5 - min_dyn_obs_dist)
             dynamic_exp_scale = float(0.9 * np.exp(0.6 / 0.3))
             dynamic_exp = -dynamic_exp_scale * torch.exp(-min_dyn_obs_dist / 0.3)
@@ -1389,7 +1383,7 @@ class NavigationEnv(IsaacEnv):
         # 步骤1：获取机器人根状态
         # =========================================================================
         # 根状态：[世界位置(3), 姿态四元数(4), 世界速度(3), 角速度(3), ...]
-        self.root_state = self.go2.get_state(env_frame=False)
+        self.root_state = self.go2.get_state()
 
         # 保存前13维用于额外信息（供控制器使用）
         self.info["robot_state_info"][:] = self.root_state[..., :13]
