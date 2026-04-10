@@ -68,7 +68,7 @@ def main(cfg):
         cfg.algo,  # 算法配置（学习率、网络结构等）
         transformed_env.observation_spec,  # 观测空间规格
         transformed_env.action_spec,  # 动作空间规格
-        cfg.device,  # 计算设备（cuda/cpu）
+        cfg.device,  # 计算设备
     )
 
     # -------------------------------------------------------------------------

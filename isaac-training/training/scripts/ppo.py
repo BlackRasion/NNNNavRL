@@ -1,11 +1,9 @@
 """
-PPO (Proximal Policy Optimization) 算法实现 - Go2 四足机器人导航
-
-该文件实现了 Go2 四足机器人的 PPO 算法，包括：
+该文件实现了地面移动机器人的 PPO 算法，包括：
 1. 特征提取器（CNN + MLP）
-   - LiDAR 静态障碍物特征: [batch, 1, 36, 3] -> 128 维
+   - LiDAR 静态障碍物特征: [batch, 1, 36, 3]
    - 机器人状态特征: 7 维 (位置、速度、方向等)
-   - 动态障碍物特征: [batch, 1, 5, 10] -> 64 维
+   - 动态障碍物特征: [batch, 1, 5, 10] 
 2. Actor 网络（Beta 分布策略）
    - 输出动作维度: 3 (Vx, Vy, Vyaw)
 3. Critic 网络（状态价值估计）
@@ -109,7 +107,7 @@ class PPO(TensorDictModuleBase):
         # 步骤 2: 构建 Actor 网络（策略网络）
         # =========================================================================
         # 动作维度: 3 (Vx, Vy, Vyaw) - Go2 四足机器人的线速度和角速度
-        self.n_agents, self.action_dim = action_spec.shape
+        self.action_dim = action_spec.shape
         self.actor = ProbabilisticActor(
             TensorDictModule(
                 BetaActor(self.action_dim), ["_feature"], ["alpha", "beta"]
@@ -183,7 +181,6 @@ class PPO(TensorDictModuleBase):
         # =========================================================================
         # 动作处理：将归一化动作映射到实际速度范围
         # =========================================================================
-        # 策略输出机器人坐标系下的速度命令(Vx, Vy, Vyaw)
         # 将归一化动作 (0,1) 映射到实际速度范围 [-action_limit, action_limit]
         actions = (
             2 * tensordict["agents", "action_normalized"] - 1.0
@@ -216,7 +213,7 @@ class PPO(TensorDictModuleBase):
         # =====================================================================
         rewards = tensordict["next", "agents", "reward"]  # 奖励: 状态转移获得的即时奖励
 
-        dones = tensordict["next", "terminated"]  # 终止标志: 下一状态是否为终止状态
+        dones = tensordict["next", "done"]  # 终止标志: 下一状态是否为终止状态
 
         values = tensordict["state_value"]  # 当前状态价值: 前向传播时已计算并存储
 
@@ -296,8 +293,8 @@ class PPO(TensorDictModuleBase):
         # =====================================================================
         # 熵衡量策略的随机性，高熵 = 更多探索
         # 损失函数中减去熵，鼓励策略保持一定随机性
-        action_entropy = action_dist.entropy()
-        entropy_loss = -self.cfg.entropy_loss_coefficient * torch.mean(action_entropy)
+        action_entropy_loss = action_dist.entropy()
+        entropy_loss = -self.cfg.entropy_loss_coefficient * torch.mean(action_entropy_loss)
 
         # =====================================================================
         # 步骤 4: 计算 Actor 损失（PPO 核心）

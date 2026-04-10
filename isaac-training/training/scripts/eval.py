@@ -112,10 +112,6 @@ def main(cfg):
         # 记录基础信息
         info = {"env_frames": collector._frames, "rollout_fps": collector._fps}
 
-        # 注意：评估时不执行训练更新
-        # train_loss_stats = policy.train(data)
-        # info.update(train_loss_stats) # log training loss info
-
         # =========================================================================
         # 每轮都进行评估（使用确定性策略 MEAN）
         # =========================================================================

@@ -13,7 +13,7 @@ class Go2VelocityController(nn.Module):
         super().__init__()
 
     def forward(self, actions: torch.Tensor) -> torch.Tensor:
-        return torch.nan_to_num(actions, nan=0.0, posinf=0.0, neginf=0.0)
+        return torch.nan_to_num(actions, nan=0.0, posinf=0.0, neginf=0.0) # 处理 NaN 值，确保速度命令有效值
 
 
 class Go2VelController(Transform):

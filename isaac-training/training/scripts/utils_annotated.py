@@ -182,33 +182,9 @@ def make_mlp(num_units):
 # =============================================================================
 # 概率分布类
 # =============================================================================
-
-class IndependentNormal(torch.distributions.Independent):
-    """
-    独立正态分布
-    
-    用于建模连续动作空间，每个动作维度独立服从正态分布
-    通常用于高斯策略（但 NavRL 使用 Beta 分布）
-    """
-    # 参数约束: loc 为实数，scale 为正数
-    arg_constraints = {
-        "loc": torch.distributions.constraints.real, 
-        "scale": torch.distributions.constraints.positive
-    } 
-    
-    def __init__(self, loc, scale, validate_args=None):
-        # 限制 scale 最小值，防止数值不稳定
-        scale = torch.clamp_min(scale, 1e-6)
-        base_dist = torch.distributions.Normal(loc, scale)
-        # 1 表示在最后一个维度上独立
-        super().__init__(base_dist, 1, validate_args=validate_args)
-
-
 class IndependentBeta(torch.distributions.Independent):
     """
-    独立 Beta 分布
-    
-    NavRL 使用的动作分布，适合有界动作空间 (0, 1)
+    独立 Beta 分布，适合有界动作空间 (0, 1)
     Beta 分布通过 alpha 和 beta 两个形状参数控制分布形态
     
     优点:
