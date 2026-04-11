@@ -259,7 +259,7 @@ class PPO(TensorDictModuleBase):
         # =====================================================================
         rewards = tensordict["next", "agents", "reward"]  # 奖励: 状态转移获得的即时奖励
 
-        dones = tensordict["next", "done"]  # 终止标志: 下一状态是否为终止状态
+        terminated = tensordict["next", "terminated"]  # 仅真实终止标志（不含超时截断）
 
         values = tensordict["state_value"]  # 当前状态价值: 前向传播时已计算并存储
 
@@ -270,7 +270,7 @@ class PPO(TensorDictModuleBase):
         # 步骤 3: 计算 GAE 优势估计和回报
         # =====================================================================
         adv, ret = self.gae(
-            rewards, dones, values, next_values
+            rewards, terminated, values, next_values
         )  # GAE 提供低方差的优势估计，同时控制偏差
 
         # 标准化优势: 均值为 0，标准差为 1

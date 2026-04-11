@@ -1154,7 +1154,7 @@ class NavigationEnv(IsaacEnv):
         reward_distance = torch.clamp(2.0 - b * distance_2d, min=0.0)
 
         # b. 进度奖励：距离减小的奖励（塑形奖励）
-        # 奖励范围：[0.0, 13.5]
+        # 奖励范围：[-3.2, 16.0]
         if not hasattr(self, "prev_distance"):
             self.prev_distance = distance_2d.clone()
 
@@ -1250,7 +1250,7 @@ class NavigationEnv(IsaacEnv):
 
         # 速度奖励：鼓励朝向目标移动，并在静/动态任一近障时抑制高速
         min_obs_dist = torch.minimum(min_lidar_dist, min_dyn_obs_dist)
-        near_obs_speed_gate = ((min_obs_dist - 0.50) / 1.0).clamp(0.1, 1.1)
+        near_obs_speed_gate = ((min_obs_dist - 0.50) / 1.0).clamp(0.1, 1.0)
         reward_velocity = torch.clamp(vel_toward_goal, min=0.0) * near_obs_speed_gate
 
         # b. 朝向奖励：鼓励朝向目标（与速度奖励协同）
@@ -1720,10 +1720,6 @@ class NavigationEnv(IsaacEnv):
     def _compute_reward_and_done(self):
         """
         计算奖励和终止条件
-
-        将在 `_compute_state_and_obs` 中计算好的奖励和终止条件打包返回。
-        这种设计允许在计算观测时同时计算奖励，避免重复计算。
-
         返回：
         ----------
         TensorDict

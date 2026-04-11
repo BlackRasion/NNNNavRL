@@ -241,29 +241,6 @@ class IndependentBeta(torch.distributions.Independent):
 # =============================================================================
 # Actor 网络类
 # =============================================================================
-
-class Actor(nn.Module):
-    """
-    高斯策略 Actor（备用实现）
-    
-    输出正态分布的均值 (loc) 和标准差 (scale)
-    注意: NavRL 实际使用 BetaActor，此类可能用于对比实验
-    """
-    def __init__(self, action_dim: int) -> None:
-        super().__init__()
-        # 均值网络: 特征 -> 动作维度
-        self.actor_mean = nn.LazyLinear(action_dim)
-        # 对数标准差: 可学习参数，所有状态共享
-        self.actor_std = nn.Parameter(torch.zeros(action_dim)) 
-    
-    def forward(self, features: torch.Tensor):
-        # 预测均值
-        loc = self.actor_mean(features)
-        # 将对数标准差转换为标准差，并扩展到与均值相同形状
-        scale = torch.exp(self.actor_std).expand_as(loc)
-        return loc, scale
-
-
 class BetaActor(nn.Module):
     """
     Beta 分布策略 Actor（NavRL 使用）
@@ -343,8 +320,8 @@ class GAE(nn.Module):
         
         算法:
         1. 从后向前遍历时间步
-        2. 计算 TD 残差: delta = r + γ*V(s')*(1-done) - V(s)
-        3. 累积优势: A = delta + γ*λ*(1-done)*A_next
+        2. 计算 TD 残差: delta = r + γ*V(s')*(1-terminated) - V(s)
+        3. 累积优势: A = delta + γ*λ*(1-terminated)*A_next
         4. 回报 = 优势 + 价值
         
         返回:
@@ -359,16 +336,16 @@ class GAE(nn.Module):
         
         # 反向遍历时间步（从最后一步到第一步）
         for step in reversed(range(num_steps)):
-            # TD 残差: r_t + γ*V(s_{t+1})*(1-done) - V(s_t)
+            # TD 残差: r_t + γ*V(s_{t+1})*(1-terminated) - V(s_t)
             delta = (
                 reward[:, step] 
                 + self.gamma * next_value[:, step] * not_done[:, step] 
                 - value[:, step]
             )
-            # GAE 累积: A_t = delta_t + γ*λ*(1-done)*A_{t+1}
+            # GAE 累积: A_t = delta_t + γ*λ*(1-terminated)*A_{t+1}
             advantages[:, step] = gae = delta + (self.gamma * self.lmbda * not_done[:, step] * gae) 
         
-        # 回报 = 优势 + 价值（用于 Critic 的目标）
+        # 回报 = 优势 + 价值（用于 Critic 的目标）  
         returns = advantages + value
         return advantages, returns
 
