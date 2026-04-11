@@ -165,6 +165,52 @@ class PPO(TensorDictModuleBase):
         self.actor.apply(init_)
         self.critic.apply(init_)
 
+    def build_checkpoint(self, iteration: int = 0, env_frames: int = 0) -> dict:
+        """
+        构建可恢复的检查点，包含模型、优化器和元数据
+        """
+        return {
+            "model_state_dict": self.state_dict(), # 模型参数
+            "feature_extractor_optim_state_dict": self.feature_extractor_optim.state_dict(), # 特征提取器优化器参数
+            "actor_optim_state_dict": self.actor_optim.state_dict(), # Actor 优化器参数
+            "critic_optim_state_dict": self.critic_optim.state_dict(), # Critic 优化器参数
+            "iteration": int(iteration), # 训练迭代数
+            "env_frames": int(env_frames), # 环境帧数
+        }
+
+    def load_checkpoint(self, checkpoint: dict) -> dict:
+        """
+        加载检查点，支持模型参数和优化器参数的兼容加载
+        """
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            self.load_state_dict(checkpoint["model_state_dict"])
+
+            if "feature_extractor_optim_state_dict" in checkpoint:
+                self.feature_extractor_optim.load_state_dict(
+                    checkpoint["feature_extractor_optim_state_dict"]
+                )
+            if "actor_optim_state_dict" in checkpoint:
+                self.actor_optim.load_state_dict(checkpoint["actor_optim_state_dict"])
+            if "critic_optim_state_dict" in checkpoint:
+                self.critic_optim.load_state_dict(checkpoint["critic_optim_state_dict"])
+
+            return {
+                "iteration": int(checkpoint.get("iteration", 0)),
+                "env_frames": int(checkpoint.get("env_frames", 0)),
+                "optimizer_restored": all(
+                    k in checkpoint
+                    for k in (
+                        "feature_extractor_optim_state_dict",
+                        "actor_optim_state_dict",
+                        "critic_optim_state_dict",
+                    )
+                ),
+            }
+
+        # 仅加载模型参数
+        self.load_state_dict(checkpoint)
+        return {"iteration": 0, "env_frames": 0, "optimizer_restored": False}
+
     def __call__(self, tensordict):
         """
         前向传播: 根据观测生成动作
