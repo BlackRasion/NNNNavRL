@@ -438,13 +438,12 @@ def evaluate(
     """
     # 启用渲染以记录视频
     env.enable_render(True)
-    # 设置评估模式（禁用 dropout 等）
-    env.eval()
-    # 设置随机种子保证可复现
-    env.set_seed(seed)
 
-    # 渲染回调: 定期捕获帧用于视频生成
-    render_callback = RenderCallback(interval=2)
+    env.eval()  # 设置评估模式（禁用 dropout 等）
+    
+    env.set_seed(seed)  # 设置随机种子保证可复现
+
+    render_callback = RenderCallback(interval=2)    # 渲染回调: 定期捕获帧用于视频生成
     
     # 设置探索类型并执行 rollout
     with set_exploration_type(exploration_type):
@@ -456,20 +455,16 @@ def evaluate(
             break_when_any_done=False,          # 等待所有环境完成
             return_contiguous=False,            # 允许非连续内存
         )
-    
-    # 恢复渲染设置
-    env.enable_render(not cfg.headless)
-    # 重置环境
-    env.reset()
+
+    env.enable_render(not cfg.headless) # 恢复渲染设置
+    env.reset() # 重置环境
     
     # 提取每个轨迹的首次完成索引
     done = trajs.get(("next", "done")) 
-    # argmax 找到第一个 done=True 的位置
     first_done = torch.argmax(done.long(), dim=1).cpu()
 
     def take_first_episode(tensor: torch.Tensor):
         """提取每个轨迹第一次完成时的数据"""
-        # 调整索引形状以匹配张量维度
         indices = first_done.reshape(first_done.shape+(1,)*(tensor.ndim-2))
         return torch.take_along_dim(tensor, indices, dim=1).reshape(-1)
 

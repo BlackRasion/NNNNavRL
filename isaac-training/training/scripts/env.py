@@ -264,7 +264,7 @@ class NavigationEnv(IsaacEnv):
         # 围墙参数
         wall_height = 6.0  # 围墙高度（米）
         wall_thickness = 0.4  # 围墙厚度（米）
-        wall_position = self.map_range[0] + 4  # 围墙位置（距离中心） 24m
+        wall_position = self.map_range[0] + 3  # 围墙位置（距离中心） 24m
         wall_length = (wall_position + 0.1) * 2  # 围墙长度
 
         wall_material = sim_utils.PreviewSurfaceCfg(    # 围墙材质配置（与地面颜色一致）
@@ -1730,7 +1730,7 @@ class NavigationEnv(IsaacEnv):
             包含以下内容的张量字典：
             - agents/reward: 奖励值 [num_envs, 1]
             - done: 是否结束 [num_envs, 1]
-            - terminated: 是否终止（碰撞） [num_envs, 1]
+            - terminated: 是否终止（到达|碰撞） [num_envs, 1]
             - truncated: 是否截断（超时） [num_envs, 1]
         """
         # 返回奖励和终止条件
