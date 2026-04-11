@@ -35,30 +35,38 @@ def _find_latest_checkpoint(run_id: str):
     if not os.path.isdir(wandb_root):
         return None
 
-    candidates = []
+    final_candidates = []
+    iter_candidates = []
     for root, _, files in os.walk(wandb_root):
         if run_id not in root:
             continue
         for name in files:
-            if name == "checkpoint_final.pt" or re.match(r"checkpoint_\d+\.pt$", name):
-                path = os.path.join(root, name)
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    continue
-                if name == "checkpoint_final.pt":
-                    iteration = -1
-                else:
-                    m = re.match(r"checkpoint_(\d+)\.pt$", name)
-                    iteration = int(m.group(1)) if m else -1
-                candidates.append((iteration, mtime, path))
+            path = os.path.join(root, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
 
-    if not candidates:
-        return None
-    # 优先按迭代步数选择最新检查点；若无法解析迭代号，则退化为按修改时间
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return candidates[0][2]
+            if name == "checkpoint_final.pt":
+                final_candidates.append((mtime, path))
+                continue
 
+            m = re.match(r"checkpoint_(\d+)\.pt$", name)
+            if m is not None:
+                iteration = int(m.group(1))
+                iter_candidates.append((iteration, mtime, path))
+
+    # 优先读取 checkpoint_final.pt（若有多个，按修改时间最新）
+    if final_candidates:
+        final_candidates.sort(key=lambda x: x[0], reverse=True)
+        return final_candidates[0][1]
+
+    # 否则回退到按迭代步数选择 checkpoint_<iter>.pt（并以修改时间打破并列）
+    if iter_candidates:
+        iter_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return iter_candidates[0][2]
+
+    return None
 
 
 # =============================================================================
