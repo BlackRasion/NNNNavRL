@@ -9,7 +9,7 @@ from omni_drones.controllers import LeePositionController
 from omni_drones.utils.torchrl.transforms import VelController
 from omni_drones.utils.torchrl import SyncDataCollector, EpisodeStats
 from torchrl.envs.transforms import TransformedEnv, Compose
-from utils import evaluate
+from utils import evaluate, _find_latest_checkpoint
 from torchrl.envs.utils import ExplorationType
 
 # =============================================================================
@@ -72,11 +72,25 @@ def main(cfg):
         cfg.device                              # 计算设备（cuda/cpu）
     )
 
-    # -------------------------------------------------------------------------
-    # 可选：从检查点加载预训练模型（用于微调或继续训练）
-    # -------------------------------------------------------------------------
-    checkpoint = "/home/sia/whn_NavRL/NNNNavRL/isaac-training/wandb/offline-run-20260407_223253-jme5re24/files/checkpoint_final.pt"
-    policy.load_state_dict(torch.load(checkpoint))
+    resume_iteration = 0 # 恢复训练的迭代次数
+    resume_env_frames = 0 # 恢复训练的环境帧数  
+    # 自动恢复：当提供 run_id 时，自动从该 run 的最新 checkpoint 恢复。
+    if cfg.wandb.run_id is not None:
+        latest_ckpt = _find_latest_checkpoint(cfg.wandb.run_id)
+        if latest_ckpt is not None:
+            checkpoint = torch.load(latest_ckpt, map_location=cfg.device)
+            resume_info = policy.load_checkpoint(checkpoint)
+            resume_iteration = resume_info["iteration"]
+            resume_env_frames = resume_info["env_frames"]
+            print(
+                f"[NavRL]: 已恢复 checkpoint: {latest_ckpt}, "
+                f"optimizer_restored={resume_info['optimizer_restored']}"
+            )
+        else:
+            print(
+                f"[NavRL]: 未找到 run_id={cfg.wandb.run_id} 的 checkpoint，"
+                "将从当前模型初始化状态开始训练。"
+            )
     
     # =========================================================================
     # 步骤 4: 初始化回合统计收集器 和 数据收集器
@@ -89,11 +103,21 @@ def main(cfg):
     episode_stats = EpisodeStats(episode_stats_keys)
 
     # SyncDataCollector负责并行收集环境交互数据，供策略训练使用
+    remaining_frames = max(0, int(cfg.max_frame_num) - int(resume_env_frames))
+    if remaining_frames == 0:
+        print(
+            f"[NavRL]: 已达到目标帧数 max_frame_num={int(cfg.max_frame_num)}，"
+            f"当前env_frames={int(resume_env_frames)}，无需继续采样。"
+        )
+        wandb.finish()
+        sim_app.close()
+        return
+
     collector = SyncDataCollector(
         transformed_env,                        # 训练环境
         policy=policy,                          # 策略网络
         frames_per_batch=cfg.env.num_envs * cfg.algo.training_frame_num,  # 每批数据量
-        total_frames=cfg.max_frame_num,         # 总训练帧数
+        total_frames=remaining_frames,  # 本次继续训练需要收集的帧数
         device=cfg.device,                      # 计算设备
         return_same_td=True,                    # 原地更新 TensorDict（节省内存）
         exploration_type=ExplorationType.RANDOM, # 探索策略：随机采样
@@ -101,10 +125,17 @@ def main(cfg):
     # =========================================================================
     # 步骤 5: 主训练循环
     # =========================================================================
+    last_global_iter = resume_iteration # 上一个全局迭代次数
+    last_global_env_frames = resume_env_frames # 上一个全局环境帧数
+
     for i, data in enumerate(collector):
+        global_iter = resume_iteration + i + 1
+        global_env_frames = resume_env_frames + collector._frames
+        last_global_iter = global_iter
+        last_global_env_frames = global_env_frames
         info = {
-            "env_frames": collector._frames,    # env_frames: 已收集的总帧数
-            "rollout_fps": collector._fps,      # rollout_fps: 数据收集速度（帧/秒）
+            "env_frames": global_env_frames,  # env_frames: 已收集的总帧数（含续训）
+            "rollout_fps": collector._fps,  # rollout_fps: 数据收集速度（帧/秒）
         }
 
         # 训练策略
@@ -121,34 +152,45 @@ def main(cfg):
             info.update(stats)
 
         # 周期性评估策略
-        if i % cfg.eval_interval == 0:  # 每 cfg.eval_interval 步评估一次
-            print("[NavRL]: 开始评估策略，训练步数: ", i)
+        if global_iter % cfg.eval_interval == 0:  # 每 cfg.eval_interval 步评估一次
+            print("[NavRL]: 开始评估策略，训练步数: ", global_iter)
             env.enable_render(True)
             env.eval()
             eval_info = evaluate(
-                env=transformed_env, 
+                env=transformed_env,
                 policy=policy,
-                seed=cfg.seed, 
+                seed=cfg.seed,
                 cfg=cfg,
-                exploration_type=ExplorationType.MEAN, # 评估时使用确定性策略MEAN，不添加随机噪声
+                exploration_type=ExplorationType.MEAN,  # 评估时使用确定性策略MEAN，不添加随机噪声
             )
             env.enable_render(not cfg.headless)
             env.train()
             env.reset()
             info.update(eval_info)
-            print("\n[NavRL]: 评估策略完成，训练步数: ", i)
-        
-        # 更新 WandB 日志，发送所有统计信息
-        run.log(info)
+            print("\n[NavRL]: 评估策略完成，训练步数: ", global_iter)
+
+        run.log(info, step=global_env_frames)
 
         # 周期性保存模型检查点
-        if i % cfg.save_interval == 0:
-            ckpt_path = os.path.join(run.dir, f"checkpoint_{i}.pt")
-            torch.save(policy.state_dict(), ckpt_path)
-            print("[NavRL]: 模型已保存，训练步数: ", i)
+        if global_iter % cfg.save_interval == 0:
+            ckpt_path = os.path.join(run.dir, f"checkpoint_{global_iter}.pt")
+            torch.save(
+                policy.build_checkpoint(
+                    iteration=global_iter,
+                    env_frames=global_env_frames,
+                ),
+                ckpt_path,
+            )
+            print("[NavRL]: 模型已保存，训练步数: ", global_iter)
 
     ckpt_path = os.path.join(run.dir, "checkpoint_final.pt")
-    torch.save(policy.state_dict(), ckpt_path)
+    torch.save(
+        policy.build_checkpoint(
+            iteration=last_global_iter,
+            env_frames=last_global_env_frames,
+        ),
+        ckpt_path,
+    )
     # 关闭 WandB 和仿真应用
     wandb.finish()
     sim_app.close()
