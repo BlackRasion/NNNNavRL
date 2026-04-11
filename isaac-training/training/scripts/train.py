@@ -129,7 +129,7 @@ def main(cfg):
     last_global_env_frames = resume_env_frames # 上一个全局环境帧数
 
     for i, data in enumerate(collector):
-        global_iter = resume_iteration + i
+        global_iter = resume_iteration + i + 1 # 避免与恢复训练的迭代次数重复，同时避免首轮评估
         global_env_frames = resume_env_frames + collector._frames
         last_global_iter = global_iter
         last_global_env_frames = global_env_frames
