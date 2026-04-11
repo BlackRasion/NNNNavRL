@@ -138,6 +138,7 @@ class NavigationEnv(IsaacEnv):
             self.target_pos = torch.zeros(self.num_envs, 1, 3)  # 目标位置：世界坐标系 
             self.target_dir = torch.zeros(self.num_envs, 1, 3)  # 目标方向向量：用于坐标变换 
             self.reward = torch.zeros(self.num_envs, 1)  # 奖励：初始化为零 
+        self._in_reset = False # reset标记
         
         # 随机选择目标掩码索引
         self._target_mask_idx = torch.zeros(
@@ -1078,6 +1079,14 @@ class NavigationEnv(IsaacEnv):
         # 重置统计信息
         self.stats[env_ids] = 0.0
 
+    def _reset(self, tensordict: TensorDictBase, **kwargs):
+        '''在调用父类 reset 时临时置位reset标记，结束后恢复'''
+        self._in_reset = True
+        try:
+            return super()._reset(tensordict, **kwargs)
+        finally:
+            self._in_reset = False
+
     def _pre_sim_step(self, tensordict: TensorDictBase):
         """
         仿真步前处理：应用动作到机器人
@@ -1611,6 +1620,21 @@ class NavigationEnv(IsaacEnv):
             ),
             "dynamic_obstacle": dyn_obs_states,
         }
+
+        if self._in_reset: # 重置时直接返回观测, 不计算奖励
+            return TensorDict(
+                {
+                    "agents": TensorDict(
+                        {
+                            "observation": obs,
+                        },
+                        [self.num_envs],
+                    ),
+                    "stats": self.stats.clone(),
+                    "info": self.info,
+                },
+                self.batch_size,
+            )
 
         # =========================================================================
         # 步骤6：碰撞检测和到达目标检测
