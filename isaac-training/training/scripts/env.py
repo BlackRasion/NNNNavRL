@@ -91,6 +91,7 @@ class NavigationEnv(IsaacEnv):
             self.target_dir = torch.zeros(self.num_envs, 1, 3)      # 目标方向（用于坐标变换）
             self.height_range = torch.zeros(self.num_envs, 1, 2)    # 高度范围 [min, max]
             self.prev_drone_vel_w = torch.zeros(self.num_envs, 1, 3)  # 上一时刻速度
+        self._in_reset = False # reset标记，用于判断是否在重置过程中
 
 
     def _design_scene(self):
@@ -492,6 +493,14 @@ class NavigationEnv(IsaacEnv):
         self.height_range[env_ids, 0, 1] = torch.max(pos[:, 0, 2], self.target_pos[env_ids, 0, 2])
         # 重置统计信息
         self.stats[env_ids] = 0.  
+
+    def _reset(self, tensordict: TensorDictBase, **kwargs): 
+        '''在调用父类 reset 时临时置位reset标记，结束后恢复'''
+        self._in_reset = True
+        try:
+            return super()._reset(tensordict, **kwargs)
+        finally:
+            self._in_reset = False
         
     def _pre_sim_step(self, tensordict: TensorDictBase):
         """
@@ -641,6 +650,18 @@ class NavigationEnv(IsaacEnv):
             "direction": target_dir_2d,
             "dynamic_obstacle": dyn_obs_states
         }
+
+        if self._in_reset: # 重置时直接返回观测, 不计算奖励
+            return TensorDict({
+                "agents": TensorDict(
+                    {
+                        "observation": obs,
+                    }, 
+                    [self.num_envs]
+                ),
+                "stats": self.stats.clone(),
+                "info": self.info
+            }, self.batch_size)
 
         # =========================================================================
         # 奖励计算
