@@ -1319,19 +1319,20 @@ class NavigationEnv(IsaacEnv):
         collision_penalty_2d = _as_env_column(collision_penalty, "collision_penalty")
         goal_reward_2d = _as_env_column(goal_reward, "goal_reward")
         time_penalty_2d = torch.full_like(goal_reward_2d, -0.05)
+        w = self.cfg.reward_weights
 
-        # 组合奖励（固定权重）
+        # 组合奖励（通过 Hydra 配置注入权重）
         reward = (
-            reward_distance_2d * 0.35  # 距离奖励
-            + reward_progress_2d * 2.5  # 进度奖励
-            + reward_velocity_2d * 2.0  # 速度奖励
-            + reward_heading_2d * 0.5  # 朝向奖励
-            + safety_penalty_static_2d * 3.0  # 安全惩罚
-            + safety_penalty_dynamic_2d * 3.0  # 安全惩罚
-            + angular_penalty_2d * 1.0 # 平滑性惩罚
-            + collision_penalty_2d  * 1.0 # 碰撞惩罚
-            + goal_reward_2d * 1.0  # 目标奖励
-            + time_penalty_2d * 1.0  # 时间惩罚（每步固定）
+            reward_distance_2d * w.reward_distance_2d  # 距离奖励
+            + reward_progress_2d * w.reward_progress_2d  # 进度奖励
+            + reward_velocity_2d * w.reward_velocity_2d  # 速度奖励
+            + reward_heading_2d * w.reward_heading_2d  # 朝向奖励
+            + safety_penalty_static_2d * w.safety_penalty_static_2d  # 安全惩罚
+            + safety_penalty_dynamic_2d * w.safety_penalty_dynamic_2d  # 安全惩罚
+            + angular_penalty_2d * w.angular_penalty_2d  # 平滑性惩罚
+            + collision_penalty_2d * w.collision_penalty_2d  # 碰撞惩罚
+            + goal_reward_2d * w.goal_reward_2d  # 目标奖励
+            + time_penalty_2d * w.time_penalty_2d  # 时间惩罚（每步固定）
         )
 
         # 确保奖励的形状是 (num_envs, 1)

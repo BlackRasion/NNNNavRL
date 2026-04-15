@@ -1,0 +1,14 @@
+# =============================================================================
+# 奖励组合权重配置（支持 Hydra 命令行覆盖）
+# =============================================================================
+reward_weights:
+  reward_distance_2d: 0.35
+  reward_progress_2d: 2.5
+  reward_velocity_2d: 2.0
+  reward_heading_2d: 0.5
+  safety_penalty_static_2d: 3.0
+  safety_penalty_dynamic_2d: 3.0
+  angular_penalty_2d: 1.0
+  collision_penalty_2d: 1.0
+  goal_reward_2d: 1.0
+  time_penalty_2d: 1.0
