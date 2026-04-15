@@ -854,6 +854,7 @@ class NavigationEnv(IsaacEnv):
                     "reward_angular_penalty": UnboundedContinuousTensorSpec((1,)),
                     "reward_collision": UnboundedContinuousTensorSpec((1,)),
                     "reward_goal": UnboundedContinuousTensorSpec((1,)),
+                    "reward_time_penalty": UnboundedContinuousTensorSpec((1,)),
                 }
             )
             .expand(self.num_envs)
@@ -897,6 +898,7 @@ class NavigationEnv(IsaacEnv):
                 "reward_angular_penalty": torch.zeros(self.num_envs, 1, device=self.cfg.device),
                 "reward_collision": torch.zeros(self.num_envs, 1, device=self.cfg.device), 
                 "reward_goal": torch.zeros(self.num_envs, 1, device=self.cfg.device),
+                "reward_time_penalty": torch.zeros(self.num_envs, 1, device=self.cfg.device),
             },
             batch_size=[self.num_envs],
                 device=self.cfg.device,
@@ -1316,10 +1318,11 @@ class NavigationEnv(IsaacEnv):
         angular_penalty_2d = _as_env_column(angular_penalty, "angular_penalty")
         collision_penalty_2d = _as_env_column(collision_penalty, "collision_penalty")
         goal_reward_2d = _as_env_column(goal_reward, "goal_reward")
+        time_penalty_2d = torch.full_like(goal_reward_2d, -0.05)
 
         # 组合奖励（固定权重）
         reward = (
-            reward_distance_2d * 0.5  # 距离奖励
+            reward_distance_2d * 0.35  # 距离奖励
             + reward_progress_2d * 2.5  # 进度奖励
             + reward_velocity_2d * 2.0  # 速度奖励
             + reward_heading_2d * 0.5  # 朝向奖励
@@ -1328,6 +1331,7 @@ class NavigationEnv(IsaacEnv):
             + angular_penalty_2d * 1.0 # 平滑性惩罚
             + collision_penalty_2d  * 1.0 # 碰撞惩罚
             + goal_reward_2d * 1.0  # 目标奖励
+            + time_penalty_2d * 1.0  # 时间惩罚（每步固定）
         )
 
         # 确保奖励的形状是 (num_envs, 1)
@@ -1347,6 +1351,7 @@ class NavigationEnv(IsaacEnv):
             "reward_angular_penalty": angular_penalty_2d,
             "reward_collision": collision_penalty_2d,
             "reward_goal": goal_reward_2d,
+            "reward_time_penalty": time_penalty_2d,
         }
 
         return reward, reward_dict
@@ -1695,6 +1700,7 @@ class NavigationEnv(IsaacEnv):
         angular_vel_penalty_2d = reward_dict["reward_angular_penalty"]
         collision_penalty = reward_dict["reward_collision"]
         reward_goal = reward_dict["reward_goal"]
+        reward_time_penalty = reward_dict["reward_time_penalty"]
 
 
 
@@ -1724,6 +1730,8 @@ class NavigationEnv(IsaacEnv):
         self.stats["reward_angular_penalty"] = angular_vel_penalty_2d
         self.stats["reward_collision"] = collision_penalty
         self.stats["reward_goal"] = reward_goal
+        self.stats["reward_time_penalty"] = reward_time_penalty
+
 
 
         # 返回观测张量字典
